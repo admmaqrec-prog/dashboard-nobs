@@ -255,10 +255,11 @@ HTML = r"""<!DOCTYPE html>
 <title>Dashboard Comercial</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c}
+:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c;--header-bg:rgba(13,13,15,.95)}
+html.light{--bg:#f0f2f5;--surface:#ffffff;--surface2:#e8eaed;--border:rgba(0,0,0,.09);--border2:rgba(0,0,0,.15);--text:#1a1a2e;--muted:#999;--dim:#555;--blue:#2563eb;--blue-dim:rgba(37,99,235,.1);--green:#059669;--green-dim:rgba(5,150,105,.1);--red:#dc2626;--red-dim:rgba(220,38,38,.1);--amber:#d97706;--amber-dim:rgba(217,119,6,.1);--purple:#7c3aed;--teal:#0d9488;--coral:#ea580c;--header-bg:rgba(240,242,245,.95)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;line-height:1.5}
-header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:rgba(13,13,15,.95);backdrop-filter:blur(12px)}
+header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:var(--header-bg);backdrop-filter:blur(12px)}
 .logo{display:flex;align-items:center;gap:10px}
 .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
@@ -267,6 +268,8 @@ header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;a
 .last-update{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .refresh-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 14px;border-radius:6px;font-size:12px;font-family:'Syne',sans-serif;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .2s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
+.theme-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 11px;border-radius:6px;font-size:15px;cursor:pointer;transition:all .2s;line-height:1}
+.theme-btn:hover{border-color:var(--amber);color:var(--amber)}
 .period-selector{display:flex;gap:4px}
 .period-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace;cursor:pointer;transition:all .2s}
 .period-btn.active,.period-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
@@ -374,6 +377,15 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 .d1-item-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
 .d1-item-user{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace}
 .d1-empty{padding:.75rem 0;font-size:12px;color:var(--muted);font-family:'DM Mono',monospace}
+.chart-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;margin-bottom:2rem}
+.chart-title{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:1rem}
+.chart-bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-bottom:0}
+.chart-col{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:0}
+.chart-bar{width:100%;border-radius:4px 4px 0 0;background:var(--blue);transition:height .4s;min-height:2px;cursor:pointer;position:relative}
+.chart-bar:hover{background:var(--green)}
+.chart-bar-val{font-size:10px;font-family:'DM Mono',monospace;color:var(--dim);font-weight:600}
+.chart-bar-lbl{font-size:9px;font-family:'DM Mono',monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
+.chart-bar-today{background:var(--green)}
 </style>
 </head>
 <body>
@@ -394,6 +406,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
+    <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
     <button class="refresh-btn" id="rbtn" onclick="loadAll()"><span id="rspin">&#8635;</span> Atualizar</button>
   </div>
 </header>
@@ -409,6 +422,9 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 </main>
 <script>
 let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
+
+function toggleTheme(){const l=document.documentElement.classList.toggle('light');document.getElementById('tbtn').textContent=l?'☀️':'🌙';localStorage.setItem('theme',l?'light':'dark');}
+(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');const b=document.getElementById('tbtn');if(b)b.textContent='☀️';}})();
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
@@ -620,6 +636,8 @@ function renderTotal(){
     <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
   </div>`;
 
+  h+=renderContratosChart(rp.contratos_mes, rrr.contratos_mes);
+
   // split RP x RRR
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
   h+=`<div class="total-split">
@@ -695,21 +713,30 @@ function renderTotal(){
   return h;
 }
 
+function prevWorkday(date){
+  // retorna o ultimo dia util anterior (pula sabado e domingo)
+  const d=new Date(date);
+  do{d.setDate(d.getDate()-1);}while(d.getDay()===0||d.getDay()===6);
+  return d;
+}
+function dateStr(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+
 function renderD1(rpAtivos, rrrAtivos){
   const now=new Date();
-  const todayStr=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  const yd=new Date(now);yd.setDate(yd.getDate()-1);
-  const yesterdayStr=`${yd.getFullYear()}-${String(yd.getMonth()+1).padStart(2,'0')}-${String(yd.getDate()).padStart(2,'0')}`;
+  const todayStr=dateStr(now);
+  const prevWd=prevWorkday(now);
+  const prevWdStr=dateStr(prevWd);
+  const isMonday=now.getDay()===1;
+  const d1Label=isMonday?'Sexta-feira (D+1)':'Ontem (D+1)';
 
-  // combinar ambos os funis com tag
   const allAtivos=[
     ...(rpAtivos||[]).map(d=>({...d,_funil:'RP'})),
     ...(rrrAtivos||[]).map(d=>({...d,_funil:'RRR'}))
   ];
 
-  // D+1: updated_at == ontem (permanecem na etapa desde ontem)
-  const d1=allAtivos.filter(d=>(d.updated_at||'').startsWith(yesterdayStr));
-  // Hoje: updated_at == hoje (movidos hoje para contrato enviado)
+  // D+1: updated_at == ultimo dia util (sexta se hoje e segunda, senao ontem)
+  const d1=allAtivos.filter(d=>(d.updated_at||'').startsWith(prevWdStr));
+  // Hoje: updated_at == hoje
   const dHoje=allAtivos.filter(d=>(d.updated_at||'').startsWith(todayStr));
 
   let h=`<div class="d1-wrap">
@@ -719,19 +746,49 @@ function renderD1(rpAtivos, rrrAtivos){
       <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
     </div>`;
 
-  // secao D+1
-  h+=`<div class="d1-section"><div class="d1-section-label">D+1 — Enviados ontem, aguardando assinatura</div>`;
-  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando desde ontem</div>`;}
-  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--amber);font-family:'DM Mono',monospace;white-space:nowrap">desde ontem</span></div>`;});}
+  h+=`<div class="d1-section"><div class="d1-section-label">D+1 — ${d1Label}, aguardando assinatura</div>`;
+  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando</div>`;}
+  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--amber);font-family:'DM Mono',monospace;white-space:nowrap">${d1Label.split(' ')[0].toLowerCase()}</span></div>`;});}
   h+=`</div>`;
 
-  // secao Hoje
   h+=`<div class="d1-section"><div class="d1-section-label">Movidos para contrato enviado hoje</div>`;
   if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
   else{dHoje.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;white-space:nowrap">hoje</span></div>`;});}
   h+=`</div>`;
 
   h+=`</div>`;
+  return h;
+}
+
+function renderContratosChart(rpContratos, rrrContratos){
+  // agrupa todos os contratos (ambos funis) por dia (updated_at)
+  const todos=[...(rpContratos||[]),...(rrrContratos||[])];
+  const byDay={};
+  todos.forEach(d=>{
+    const dt=(d.updated_at||'').slice(0,10);
+    if(!dt)return;
+    byDay[dt]=(byDay[dt]||0)+1;
+  });
+  const days=Object.keys(byDay).sort();
+  if(!days.length)return'';
+  const todayStr=dateStr(new Date());
+  const maxVal=Math.max(...Object.values(byDay),1);
+
+  let h=`<div class="chart-wrap">
+    <div class="chart-title">Contratos enviados por dia — ${MN[selM]}/${selY}</div>
+    <div class="chart-bars">`;
+  days.forEach(day=>{
+    const val=byDay[day];
+    const pct=Math.round((val/maxVal)*100);
+    const isToday=day===todayStr;
+    const lbl=day.slice(5); // MM-DD
+    h+=`<div class="chart-col" title="${day}: ${val} contrato(s)">
+      <span class="chart-bar-val">${val}</span>
+      <div class="chart-bar${isToday?' chart-bar-today':''}" style="height:${pct}%"></div>
+      <span class="chart-bar-lbl">${lbl}</span>
+    </div>`;
+  });
+  h+=`</div></div>`;
   return h;
 }
 
