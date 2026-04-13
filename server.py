@@ -377,15 +377,6 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 .d1-item-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
 .d1-item-user{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace}
 .d1-empty{padding:.75rem 0;font-size:12px;color:var(--muted);font-family:'DM Mono',monospace}
-.chart-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;margin-bottom:2rem}
-.chart-title{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:1rem}
-.chart-bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-bottom:0}
-.chart-col{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:0}
-.chart-bar{width:100%;border-radius:4px 4px 0 0;background:var(--blue);transition:height .4s;min-height:2px;cursor:pointer;position:relative}
-.chart-bar:hover{background:var(--green)}
-.chart-bar-val{font-size:10px;font-family:'DM Mono',monospace;color:var(--dim);font-weight:600}
-.chart-bar-lbl{font-size:9px;font-family:'DM Mono',monospace;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;text-align:center}
-.chart-bar-today{background:var(--green)}
 </style>
 </head>
 <body>
@@ -636,7 +627,7 @@ function renderTotal(){
     <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
   </div>`;
 
-  h+=renderContratosChart(rp.contratos_mes, rrr.contratos_mes);
+  h+=renderContratosPorDia(rp.contratos_mes, rrr.contratos_mes);
 
   // split RP x RRR
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
@@ -760,35 +751,42 @@ function renderD1(rpAtivos, rrrAtivos){
   return h;
 }
 
-function renderContratosChart(rpContratos, rrrContratos){
-  // agrupa todos os contratos (ambos funis) por dia (updated_at)
-  const todos=[...(rpContratos||[]),...(rrrContratos||[])];
+function renderContratosPorDia(rpContratos, rrrContratos){
+  // agrupa todos os contratos por dia (updated_at), do dia 1 ao ultimo com contrato
+  const todos=[...(rpContratos||[]).map(d=>({...d,_funil:'RP'})),...(rrrContratos||[]).map(d=>({...d,_funil:'RRR'}))];
   const byDay={};
   todos.forEach(d=>{
     const dt=(d.updated_at||'').slice(0,10);
     if(!dt)return;
-    byDay[dt]=(byDay[dt]||0)+1;
+    if(!byDay[dt])byDay[dt]=[];
+    byDay[dt].push(d);
   });
   const days=Object.keys(byDay).sort();
   if(!days.length)return'';
   const todayStr=dateStr(new Date());
-  const maxVal=Math.max(...Object.values(byDay),1);
+  const total=todos.length;
 
-  let h=`<div class="chart-wrap">
-    <div class="chart-title">Contratos enviados por dia — ${MN[selM]}/${selY}</div>
-    <div class="chart-bars">`;
+  let h=`<div class="stage-row" id="cpd-wrap" style="margin-bottom:2rem">
+    <div class="stage-header" onclick="tog('cpd-wrap')">
+      <div class="stage-color" style="background:var(--blue)"></div>
+      <span class="stage-name">Contratos enviados por dia — ${MN[selM]}/${selY}</span>
+      <span class="stage-count" style="color:var(--blue)">${total}</span>
+      <span class="stage-arrow">&#9654;</span>
+    </div>
+    <div class="stage-deals">
+      <table class="dt"><thead><tr><th>Dia</th><th>Qtd</th><th>Negociacoes</th><th>Responsavel</th><th>Funil</th></tr></thead><tbody>`;
   days.forEach(day=>{
-    const val=byDay[day];
-    const pct=Math.round((val/maxVal)*100);
+    const items=byDay[day];
     const isToday=day===todayStr;
-    const lbl=day.slice(5); // MM-DD
-    h+=`<div class="chart-col" title="${day}: ${val} contrato(s)">
-      <span class="chart-bar-val">${val}</span>
-      <div class="chart-bar${isToday?' chart-bar-today':''}" style="height:${pct}%"></div>
-      <span class="chart-bar-lbl">${lbl}</span>
-    </div>`;
+    const dayLabel=day.slice(8)+'/'+day.slice(5,7)+(isToday?' (hoje)':'');
+    items.forEach((d,idx)=>{
+      const rowspan=idx===0?` rowspan="${items.length}"`:'';
+      h+=`<tr>`;
+      if(idx===0)h+=`<td class="dd"${rowspan} style="${isToday?'color:var(--green);font-weight:700':''}">${dayLabel}</td><td class="dd"${rowspan} style="text-align:center;font-weight:700;color:var(--blue)">${items.length}</td>`;
+      h+=`<td class="dn">${d.name||'--'}</td><td class="du">${d.user||'--'}</td><td class="dd">${d._funil}</td></tr>`;
+    });
   });
-  h+=`</div></div>`;
+  h+=`</tbody></table></div></div>`;
   return h;
 }
 
