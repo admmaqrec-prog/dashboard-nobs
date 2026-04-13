@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dashboard RD Station — Servidor local
+Dashboard RD Station — Servidor web (Render)
 Rode com: python3 server.py
-Acesse em: http://localhost:8765
+Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
 import urllib.request
@@ -103,8 +103,29 @@ def get_origem(deal):
             return (cf.get("value") or "").strip()
     return ""
 
+def get_fonte(deal):
+    """Retorna o campo 'fonte' nativo do deal (ex: 'Busca Paga | Facebook Ads').
+    A API do RD Station pode retornar como 'fonte', 'source' ou dentro de deal_source."""
+    # campo direto
+    for key in ("fonte", "source"):
+        v = (deal.get(key) or "").strip()
+        if v:
+            return v
+    # campo aninhado deal_source
+    ds = deal.get("deal_source")
+    if isinstance(ds, dict):
+        return (ds.get("name") or ds.get("fonte") or ds.get("source") or "").strip()
+    # fallback: buscar em custom fields com label "fonte"
+    for cf in (deal.get("deal_custom_fields") or []):
+        lbl = (cf.get("custom_field") or {}).get("label", "")
+        if "fonte" in lbl.lower():
+            return (cf.get("value") or "").strip()
+    return ""
+
 def is_busca_paga(deal):
-    return get_origem(deal).lower().startswith("busca paga")
+    origem = get_origem(deal).lower()
+    fonte  = get_fonte(deal).lower()
+    return origem.startswith("busca paga") or fonte.startswith("busca paga")
 
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
@@ -219,6 +240,7 @@ def load_funil_data(key, month, year):
             "closed_at":        d.get("closed_at") or "",
             "amount_total":     d.get("amount_total") or 0,
             "origem":           get_origem(d),
+            "fonte":            get_fonte(d),
             "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
             "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
         }
@@ -507,7 +529,7 @@ function renderPane(key){
 
   // responsaveis
   const umap={};
-  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;umap[u].valor+=(d.amount_total||0);}));
+  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
   s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].vendas.push(d);umap[u].valor+=(d.amount_total||0);});
   if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
   s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
@@ -613,7 +635,7 @@ function renderTotal(){
 
   // responsaveis totais — PRIMEIRO, com listas colapsaveis
   const umap={};
-  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);umap[u].valor+=(d.amount_total||0);}}
+  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
   rp.vendas.forEach(d=>addU(uname(d),'vendas',d));
   rrr.vendas.forEach(d=>addU(uname(d),'vendas',d));
   if(rp.contratos_mes)rp.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
@@ -731,7 +753,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"\n-> Buscando {key.upper()} -- {month}/{year}")
                 data = load_funil_data(key, month, year)
                 self.send_json(data)
-                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}")
+                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  busca_paga_v={data['vendas_busca_paga']}  busca_paga_c={data['contratos_busca_paga']}")
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self.send_json({"error": str(e)}, 500)
