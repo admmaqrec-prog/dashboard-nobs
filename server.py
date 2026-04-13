@@ -530,8 +530,8 @@ function renderPane(key){
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
@@ -621,8 +621,8 @@ function renderTotal(){
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.vendas,...rrr.vendas].reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>
