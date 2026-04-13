@@ -8,7 +8,6 @@ import json
 import urllib.request
 import urllib.parse
 import datetime
-import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -76,21 +75,36 @@ def fetch_ok_stage(pipeline_id, stage_id):
 def fetch_lost_stage(pipeline_id, stage_id):
     return fetch_all(pipeline_id, stage_id, "&win=false")
 
-def in_month(deal, month, year, field="updated_at"):
-    v = deal.get(field) or deal.get("updated_at") or ""
-    if not v:
-        return False
+def parse_dt(val):
+    if not val:
+        return None
     try:
-        dt = datetime.datetime.fromisoformat(v.replace("Z", "+00:00"))
-        return dt.month == month and dt.year == year
+        return datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
     except Exception:
+        return None
+
+def in_month(deal, month, year, field="updated_at"):
+    dt = parse_dt(deal.get(field) or "")
+    if not dt:
         return False
+    return dt.month == month and dt.year == year
 
 def user_name(deal):
     u = deal.get("user")
     if isinstance(u, dict):
         return u.get("name") or "desconhecido"
     return u or "desconhecido"
+
+def get_origem(deal):
+    """Retorna valor do campo custom 'Origem especifica'."""
+    for cf in (deal.get("deal_custom_fields") or []):
+        lbl = (cf.get("custom_field") or {}).get("label", "")
+        if "origem" in lbl.lower():
+            return (cf.get("value") or "").strip()
+    return ""
+
+def is_busca_paga(deal):
+    return "busca" in get_origem(deal).lower()
 
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
@@ -123,19 +137,37 @@ def load_funil_data(key, month, year):
         elif kind == "lost":
             todas_perdas.extend(result)
 
-    etapas_data = [etapas_map[e["id"]] for e in funil["etapas"]]
+    # FIX 1: filtrar etapas ativas pelo mes selecionado (updated_at)
+    etapas_data = []
+    for e in funil["etapas"]:
+        all_active = etapas_map[e["id"]]["deals"]
+        mes_active = [d for d in all_active if in_month(d, month, year, "updated_at")]
+        etapas_data.append({**e, "deals": mes_active})
 
     # vendas do mes (pelo closed_at)
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
-    # contratos enviados do mes (pela updated_at)
-    contratos_mes = [d for d in contrato_all if in_month(d, month, year)]
+    # FIX 2: contratos do mes — todos que passaram pela etapa no mes (updated_at)
+    # inclui ativos, ganhos e perdidos na etapa de contrato
+    contrato_active_mes = [d for d in etapas_map[funil["contrato_stage_id"]]["deals"]
+                           if in_month(d, month, year, "updated_at")]
+    contrato_ok_mes     = [d for d in contrato_all
+                           if in_month(d, month, year, "updated_at")]
+    # deduplicar por _id
+    seen = set()
+    contratos_mes = []
+    for d in contrato_active_mes + contrato_ok_mes:
+        did = d.get("_id") or d.get("id")
+        if did not in seen:
+            seen.add(did)
+            contratos_mes.append(d)
+
+    # FIX 3: vendas por busca paga (campo custom "Origem especifica" contendo "busca")
+    vendas_busca_paga = [d for d in vendas_mes if is_busca_paga(d)]
 
     # ── feed de movimentacoes recentes ────────────────────────────────────────
     feed_candidates = []
-
-    # ativos nas etapas
     for e in etapas_data:
         for d in e["deals"]:
             tipo = "contrato" if e["id"] == funil["contrato_stage_id"] else "etapa"
@@ -148,8 +180,6 @@ def load_funil_data(key, month, year):
                 "ts":    d.get("updated_at") or d.get("created_at") or "",
                 "funil": funil["nome"],
             })
-
-    # vendas (todas, nao so do mes — para pegar as mais recentes)
     for d in ok_deals:
         feed_candidates.append({
             "nome":  d.get("name") or "desconhecido",
@@ -160,13 +190,9 @@ def load_funil_data(key, month, year):
             "ts":    d.get("closed_at") or d.get("updated_at") or "",
             "funil": funil["nome"],
         })
-
-    # perdas
     for d in todas_perdas:
-        stage_name = ""
         ds = d.get("deal_stage")
-        if isinstance(ds, dict):
-            stage_name = ds.get("name") or ""
+        stage_name = (ds.get("name") or "") if isinstance(ds, dict) else ""
         feed_candidates.append({
             "nome":  d.get("name") or "desconhecido",
             "user":  user_name(d),
@@ -176,15 +202,29 @@ def load_funil_data(key, month, year):
             "ts":    d.get("updated_at") or d.get("closed_at") or "",
             "funil": funil["nome"],
         })
-
     feed_candidates.sort(key=lambda x: x["ts"], reverse=True)
 
+    # FIX 4: valor total por responsavel (amount_total)
+    # serializar deals com amount_total e origem para uso no front
+    def slim(d, extra_fields=None):
+        """Versao reduzida do deal para serializar no JSON."""
+        out = {
+            "name":         d.get("name") or "",
+            "user":         user_name(d),
+            "updated_at":   d.get("updated_at") or "",
+            "closed_at":    d.get("closed_at") or "",
+            "amount_total": d.get("amount_total") or 0,
+            "origem":       get_origem(d),
+        }
+        return out
+
     return {
-        "etapas":        etapas_data,
-        "vendas":        vendas_mes,
-        "contratos_mes": contratos_mes,
-        "perdas":        todas_perdas,
-        "feed":          feed_candidates[:60],
+        "etapas":           [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
+        "vendas":           [slim(d) for d in vendas_mes],
+        "contratos_mes":    [slim(d) for d in contratos_mes],
+        "perdas":           [slim(d) for d in todas_perdas],
+        "feed":             feed_candidates[:60],
+        "vendas_busca_paga": len(vendas_busca_paga),
     }
 
 
@@ -221,10 +261,10 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .summary-grid-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:2rem}
 .summary-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;position:relative;overflow:hidden}
 .summary-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
-.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}
+.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}
 .sc-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem}
 .sc-val{font-size:38px;font-weight:700;line-height:1;margin-bottom:.3rem}
-.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}
+.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}
 .sc-sub{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .section-hd{display:flex;align-items:center;gap:10px;margin-bottom:1rem}
 .section-hd h3{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -380,7 +420,7 @@ async function loadAll(){
   document.getElementById('rbtn').querySelector('#rspin').className='';
 }
 
-function uname(d){const u=d.user;return(u&&u.name)?u.name:(typeof u==='string'?u:'--');}
+function uname(d){return d.user||'--';}
 function fdate(iso){if(!iso)return'--';const d=new Date(iso);return`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;}
 function ftime(iso){
   if(!iso)return'--';const d=new Date(iso);const now=new Date();
@@ -388,6 +428,7 @@ function ftime(iso){
   if(diff<1)return'agora';if(diff<60)return`${diff}min`;if(diff<1440)return`${Math.floor(diff/60)}h atras`;
   return fdate(iso);
 }
+function fmoney(v){if(!v)return'--';return'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function calcProj(v,m,y){
   const wdT=workdaysInMonth(m,y),wdD=workdaysUntilToday(m,y);
   if(!wdD)return{proj:0,wdT,wdD,ritmo:'0.00'};
@@ -441,21 +482,25 @@ function renderPane(key){
   const msorted=Object.entries(mmap).sort((a,b)=>b[1]-a[1]);
 
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">negociacoes ativas</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">no mes selecionado</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">no mes</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">${wdD} dias uteis decorridos</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
+    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:24px">${fmoney(s.etapas.reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma das etapas do mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
 
   // responsaveis
   const umap={};
-  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
-  s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0};umap[u].vendas.push(d);});
-  if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0};umap[u].contratos.push(d);});
-  s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0};umap[u].perdas++;});
+  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;umap[u].valor+=(d.amount_total||0);}));
+  s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].vendas.push(d);umap[u].valor+=(d.amount_total||0);});
+  if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
+  s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
   const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].ativo-a[1].ativo);
 
   h+=`<div class="section-hd"><h3>Por responsavel</h3><span class="cnt blue">${users.length} vendedores</span><div class="section-line"></div></div><div class="resp-grid">`;
@@ -464,7 +509,8 @@ function renderPane(key){
     h+=`<div class="resp-card">
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
-        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div><div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${Object.keys(data.et).length} etapas ativas</div></div>
+        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${Object.keys(data.et).length} etapas · ${fmoney(data.valor)}</div></div>
         <div class="resp-total" style="color:${color}">${data.ativo}</div>
       </div><div class="resp-rows">`;
     s.etapas.forEach(e=>{const c=data.et[e.nome]||0;if(!c)return;h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:${e.cor}"></span>${e.nome}</span><span class="resp-row-val" style="color:${e.cor}">${c}</span></div>`;});
@@ -520,12 +566,17 @@ function renderTotal(){
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
 
+  const totBuscaPaga=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">negociacoes ativas</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">no mes selecionado</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
+    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPaga}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
   </div>`;
 
   // split RP x RRR
@@ -547,7 +598,7 @@ function renderTotal(){
 
   // responsaveis totais — PRIMEIRO, com listas colapsaveis
   const umap={};
-  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else umap[u][f].push(d);}
+  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);umap[u].valor+=(d.amount_total||0);}}
   rp.vendas.forEach(d=>addU(uname(d),'vendas',d));
   rrr.vendas.forEach(d=>addU(uname(d),'vendas',d));
   if(rp.contratos_mes)rp.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
@@ -565,7 +616,8 @@ function renderTotal(){
     h+=`<div class="resp-card">
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
-        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div><div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} negociacoes ativas</div></div>
+        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${fmoney(data.valor)}</div></div>
         <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
       </div><div class="resp-rows">`;
     // contratos — clicavel para abrir/fechar lista
@@ -658,8 +710,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    PORT = int(os.environ.get("PORT", 8765))
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    PORT = 8765
+    server = HTTPServer(("localhost", PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
