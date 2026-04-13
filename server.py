@@ -752,19 +752,21 @@ function renderD1(rpAtivos, rrrAtivos){
 }
 
 function renderContratosPorDia(rpContratos, rrrContratos){
-  // agrupa todos os contratos por dia (updated_at), do dia 1 ao ultimo com contrato
-  const todos=[...(rpContratos||[]).map(d=>({...d,_funil:'RP'})),...(rrrContratos||[]).map(d=>({...d,_funil:'RRR'}))];
+  // agrupa por dia somente do mes selecionado
+  const todos=[...(rpContratos||[]),...(rrrContratos||[])];
   const byDay={};
   todos.forEach(d=>{
     const dt=(d.updated_at||'').slice(0,10);
     if(!dt)return;
-    if(!byDay[dt])byDay[dt]=[];
-    byDay[dt].push(d);
+    const [y,m]=dt.split('-').map(Number);
+    if(m!==selM||y!==selY)return; // somente mes selecionado
+    byDay[dt]=(byDay[dt]||0)+1;
   });
-  const days=Object.keys(byDay).sort();
-  if(!days.length)return'';
+
+  // gerar todos os dias do mes selecionado
+  const daysInMonth=new Date(selY,selM,0).getDate();
   const todayStr=dateStr(new Date());
-  const total=todos.length;
+  const total=Object.values(byDay).reduce((a,b)=>a+b,0);
 
   let h=`<div class="stage-row" id="cpd-wrap" style="margin-bottom:2rem">
     <div class="stage-header" onclick="tog('cpd-wrap')">
@@ -774,18 +776,18 @@ function renderContratosPorDia(rpContratos, rrrContratos){
       <span class="stage-arrow">&#9654;</span>
     </div>
     <div class="stage-deals">
-      <table class="dt"><thead><tr><th>Dia</th><th>Qtd</th><th>Negociacoes</th><th>Responsavel</th><th>Funil</th></tr></thead><tbody>`;
-  days.forEach(day=>{
-    const items=byDay[day];
-    const isToday=day===todayStr;
-    const dayLabel=day.slice(8)+'/'+day.slice(5,7)+(isToday?' (hoje)':'');
-    items.forEach((d,idx)=>{
-      const rowspan=idx===0?` rowspan="${items.length}"`:'';
-      h+=`<tr>`;
-      if(idx===0)h+=`<td class="dd"${rowspan} style="${isToday?'color:var(--green);font-weight:700':''}">${dayLabel}</td><td class="dd"${rowspan} style="text-align:center;font-weight:700;color:var(--blue)">${items.length}</td>`;
-      h+=`<td class="dn">${d.name||'--'}</td><td class="du">${d.user||'--'}</td><td class="dd">${d._funil}</td></tr>`;
-    });
-  });
+      <table class="dt"><thead><tr><th>Dia</th><th>Contratos</th></tr></thead><tbody>`;
+
+  for(let d=1;d<=daysInMonth;d++){
+    const dayKey=`${selY}-${String(selM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const qty=byDay[dayKey]||0;
+    const isToday=dayKey===todayStr;
+    const dayLabel=`${String(d).padStart(2,'0')}/${String(selM).padStart(2,'0')}${isToday?' (hoje)':''}`;
+    const color=qty>0?'color:var(--blue);font-weight:700':'color:var(--muted)';
+    const dayColor=isToday?'color:var(--green);font-weight:700':'';
+    h+=`<tr><td class="dd" style="${dayColor}">${dayLabel}</td><td style="font-family:'DM Mono',monospace;font-size:13px;padding:.6rem 1.25rem;${color}">${qty}</td></tr>`;
+  }
+
   h+=`</tbody></table></div></div>`;
   return h;
 }
