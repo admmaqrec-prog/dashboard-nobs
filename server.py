@@ -103,8 +103,29 @@ def get_origem(deal):
             return (cf.get("value") or "").strip()
     return ""
 
+def get_fonte(deal):
+    """Retorna o campo 'fonte' nativo do deal (ex: 'Busca Paga | Facebook Ads').
+    A API do RD Station pode retornar como 'fonte', 'source' ou dentro de deal_source."""
+    # campo direto
+    for key in ("fonte", "source"):
+        v = (deal.get(key) or "").strip()
+        if v:
+            return v
+    # campo aninhado deal_source
+    ds = deal.get("deal_source")
+    if isinstance(ds, dict):
+        return (ds.get("name") or ds.get("fonte") or ds.get("source") or "").strip()
+    # fallback: buscar em custom fields com label "fonte"
+    for cf in (deal.get("deal_custom_fields") or []):
+        lbl = (cf.get("custom_field") or {}).get("label", "")
+        if "fonte" in lbl.lower():
+            return (cf.get("value") or "").strip()
+    return ""
+
 def is_busca_paga(deal):
-    return "busca" in get_origem(deal).lower()
+    origem = get_origem(deal).lower()
+    fonte  = get_fonte(deal).lower()
+    return origem.startswith("busca paga") or fonte.startswith("busca paga")
 
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
@@ -210,29 +231,20 @@ def load_funil_data(key, month, year):
     # serializar deals com amount_total e origem para uso no front
     def slim(d, extra_fields=None):
         """Versao reduzida do deal para serializar no JSON."""
+        ds = d.get("deal_stage")
+        dlr = d.get("deal_lost_reason")
         out = {
-            "name":         d.get("name") or "",
-            "user":         user_name(d),
-            "updated_at":   d.get("updated_at") or "",
-            "closed_at":    d.get("closed_at") or "",
-            "amount_total": d.get("amount_total") or 0,
-            "origem":       get_origem(d),
+            "name":             d.get("name") or "",
+            "user":             user_name(d),
+            "updated_at":       d.get("updated_at") or "",
+            "closed_at":        d.get("closed_at") or "",
+            "amount_total":     d.get("amount_total") or 0,
+            "origem":           get_origem(d),
+            "fonte":            get_fonte(d),
+            "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
+            "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
         }
         return out
-
-    # D+1 e Hoje: todos os deals ATIVOS na etapa "Contrato enviado" agora (sem filtro de mes)
-    # o front filtra por updated_at: ontem = D+1, hoje = movidos hoje
-    cid = funil["contrato_stage_id"]
-    contrato_ativos_todos = etapas_map[cid]["deals"]  # ja sao win=None
-    contrato_ativos_slim = [
-        {
-            "name":       d.get("name") or "",
-            "user":       user_name(d),
-            "updated_at": d.get("updated_at") or "",
-            "created_at": d.get("created_at") or "",
-        }
-        for d in contrato_ativos_todos
-    ]
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
@@ -242,7 +254,6 @@ def load_funil_data(key, month, year):
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
         "contratos_busca_paga": len(contratos_busca_paga),
-        "contrato_ativos":      contrato_ativos_slim,
     }
 
 
@@ -268,7 +279,7 @@ header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;a
 .last-update{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .refresh-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 14px;border-radius:6px;font-size:12px;font-family:'Syne',sans-serif;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .2s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
-.theme-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 11px;border-radius:6px;font-size:15px;cursor:pointer;transition:all .2s;line-height:1}
+.theme-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 12px;border-radius:6px;font-size:16px;cursor:pointer;transition:all .2s;line-height:1}
 .theme-btn:hover{border-color:var(--amber);color:var(--amber)}
 .period-selector{display:flex;gap:4px}
 .period-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace;cursor:pointer;transition:all .2s}
@@ -363,20 +374,6 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 .total-row{display:flex;justify-content:space-between;align-items:center;padding:.4rem 0}
 .total-row-label{color:var(--dim);display:flex;align-items:center;gap:8px;font-size:12px}
 .total-row-val{font-family:'DM Mono',monospace;font-size:16px;font-weight:600}
-.d1-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:2rem}
-.d1-hd{padding:.85rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.d1-title{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);flex:1}
-.d1-badge{font-size:11px;font-family:'DM Mono',monospace;padding:2px 10px;border-radius:4px;border:1px solid;font-weight:600}
-.d1-badge.yellow{color:var(--amber);border-color:rgba(240,168,48,.4);background:var(--amber-dim)}
-.d1-badge.blue{color:var(--blue);border-color:rgba(79,143,255,.4);background:var(--blue-dim)}
-.d1-section{padding:.6rem 1.25rem .2rem;border-bottom:1px solid var(--border)}
-.d1-section:last-child{border-bottom:none}
-.d1-section-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;font-family:'DM Mono',monospace}
-.d1-item{display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border)}
-.d1-item:last-child{border-bottom:none}
-.d1-item-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
-.d1-item-user{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace}
-.d1-empty{padding:.75rem 0;font-size:12px;color:var(--muted);font-family:'DM Mono',monospace}
 </style>
 </head>
 <body>
@@ -413,12 +410,17 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 </main>
 <script>
 let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
-
-function toggleTheme(){const l=document.documentElement.classList.toggle('light');document.getElementById('tbtn').textContent=l?'☀️':'🌙';localStorage.setItem('theme',l?'light':'dark');}
-(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');const b=document.getElementById('tbtn');if(b)b.textContent='☀️';}})();
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
+
+function toggleTheme(){
+  const isLight=document.documentElement.classList.toggle('light');
+  document.getElementById('tbtn').textContent=isLight?'🌑':'🌙';
+  localStorage.setItem('theme',isLight?'light':'dark');
+}
+// restaurar tema salvo
+(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');document.getElementById('tbtn').textContent='🌑';}})();
 
 function workdaysInMonth(m,y){const days=new Date(y,m,0).getDate();let w=0;for(let d=1;d<=days;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
 function workdaysUntilToday(m,y){const today=new Date();const isCurrent=(today.getMonth()+1===m&&today.getFullYear()===y);const last=isCurrent?today.getDate():new Date(y,m,0).getDate();let w=0;for(let d=1;d<=last;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
@@ -528,16 +530,14 @@ function renderPane(key){
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:24px">${fmoney(s.etapas.reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma das etapas do mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
-
-  h+=renderD1(key==='rp'?s.contrato_ativos:[], key==='rrr'?s.contrato_ativos:[]);
 
   // responsaveis
   const umap={};
@@ -621,14 +621,12 @@ function renderTotal(){
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.vendas,...rrr.vendas].reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>
   </div>`;
-
-  h+=renderContratosPorDia(rp.contratos_mes, rrr.contratos_mes);
 
   // split RP x RRR
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
@@ -701,96 +699,21 @@ function renderTotal(){
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
   h+=renderFeed(feedCombo,2);
 
-  h+=renderD1(rp.contrato_ativos, rrr.contrato_ativos);
-
-  return h;
-}
-
-function prevWorkday(date){
-  // retorna o ultimo dia util anterior (pula sabado e domingo)
-  const d=new Date(date);
-  do{d.setDate(d.getDate()-1);}while(d.getDay()===0||d.getDay()===6);
-  return d;
-}
-function dateStr(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
-
-function renderD1(rpAtivos, rrrAtivos){
-  const now=new Date();
-  const todayStr=dateStr(now);
-  const prevWd=prevWorkday(now);
-  const prevWdStr=dateStr(prevWd);
-  const isMonday=now.getDay()===1;
-  const d1Label=isMonday?'Sexta-feira (D+1)':'Ontem (D+1)';
-
-  const allAtivos=[
-    ...(rpAtivos||[]).map(d=>({...d,_funil:'RP'})),
-    ...(rrrAtivos||[]).map(d=>({...d,_funil:'RRR'}))
-  ];
-
-  // D+1: updated_at == ultimo dia util (sexta se hoje e segunda, senao ontem)
-  const d1=allAtivos.filter(d=>(d.updated_at||'').startsWith(prevWdStr));
-  // Hoje: updated_at == hoje
-  const dHoje=allAtivos.filter(d=>(d.updated_at||'').startsWith(todayStr));
-
-  let h=`<div class="d1-wrap">
-    <div class="d1-hd">
-      <span class="d1-title">&#9200; Contrato enviado — Acompanhamento diario</span>
-      <span class="d1-badge yellow">D+1: ${d1.length} aguardando</span>
-      <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
-    </div>`;
-
-  h+=`<div class="d1-section"><div class="d1-section-label">D+1 — ${d1Label}, aguardando assinatura</div>`;
-  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando</div>`;}
-  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--amber);font-family:'DM Mono',monospace;white-space:nowrap">${d1Label.split(' ')[0].toLowerCase()}</span></div>`;});}
-  h+=`</div>`;
-
-  h+=`<div class="d1-section"><div class="d1-section-label">Movidos para contrato enviado hoje</div>`;
-  if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
-  else{dHoje.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;white-space:nowrap">hoje</span></div>`;});}
-  h+=`</div>`;
-
-  h+=`</div>`;
-  return h;
-}
-
-function renderContratosPorDia(rpContratos, rrrContratos){
-  // agrupa por dia somente do mes selecionado
-  const todos=[...(rpContratos||[]),...(rrrContratos||[])];
-  const byDay={};
-  todos.forEach(d=>{
-    const dt=(d.updated_at||'').slice(0,10);
-    if(!dt)return;
-    const [y,m]=dt.split('-').map(Number);
-    if(m!==selM||y!==selY)return; // somente mes selecionado
-    byDay[dt]=(byDay[dt]||0)+1;
-  });
-
-  // gerar todos os dias do mes selecionado
-  const daysInMonth=new Date(selY,selM,0).getDate();
-  const todayStr=dateStr(new Date());
-  const total=Object.values(byDay).reduce((a,b)=>a+b,0);
-
-  let h=`<div class="stage-row" id="cpd-wrap" style="margin-bottom:2rem">
-    <div class="stage-header" onclick="tog('cpd-wrap')">
-      <div class="stage-color" style="background:var(--blue)"></div>
-      <span class="stage-name">Contratos enviados por dia — ${MN[selM]}/${selY}</span>
-      <span class="stage-count" style="color:var(--blue)">${total}</span>
-      <span class="stage-arrow">&#9654;</span>
-    </div>
-    <div class="stage-deals">
-      <table class="dt"><thead><tr><th>Dia</th><th>Contratos</th></tr></thead><tbody>`;
-
-  for(let d=1;d<=daysInMonth;d++){
-    const dayKey=`${selY}-${String(selM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const qty=byDay[dayKey]||0;
-    const isToday=dayKey===todayStr;
-    const dayLabel=`${String(d).padStart(2,'0')}/${String(selM).padStart(2,'0')}${isToday?' (hoje)':''}`;
-    const color=qty>0?'color:var(--blue);font-weight:700':'color:var(--muted)';
-    const dayColor=isToday?'color:var(--green);font-weight:700':'';
-    h+=`<tr><td class="dd" style="${dayColor}">${dayLabel}</td><td style="font-family:'DM Mono',monospace;font-size:13px;padding:.6rem 1.25rem;${color}">${qty}</td></tr>`;
+  // perdas combinadas com motivos
+  const todasPerdas=[...rp.perdas,...rrr.perdas];
+  const mmapT={};todasPerdas.forEach(d=>{const m=d.deal_lost_reason?.name||'--';mmapT[m]=(mmapT[m]||0)+1;});
+  const msortedT=Object.entries(mmapT).sort((a,b)=>b[1]-a[1]);
+  h+=`<div class="section-hd" style="margin-top:2rem"><h3>Perdas - ambos funis</h3><span class="cnt red">${totP} total</span><div class="section-line"></div></div>`;
+  h+=`<div class="motivos-grid">`+msortedT.map(([m,c])=>`<div class="mc"><span class="mc-n">${m}</span><span class="mc-v">${c}</span></div>`).join('')+`</div>`;
+  if(totP){
+    h+=`<div class="stage-row" id="perdas-total" style="margin-bottom:2rem"><div class="stage-header" onclick="tog('perdas-total')"><div class="stage-color" style="background:var(--red)"></div><span class="stage-name">Negociacoes perdidas</span><span class="stage-count" style="color:var(--red)">${totP}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Motivo</th></tr></thead><tbody>`;
+    [...rp.perdas.map(d=>({...d,_funil:'RP'})),...rrr.perdas.map(d=>({...d,_funil:'RRR'}))].forEach(d=>{
+      const m=d.deal_lost_reason?.name||'--';
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._funil}</td><td class="dd">${d.deal_stage?.name||'--'}</td><td><span class="pill">${m}</span></td></tr>`;
+    });
+    h+=`</tbody></table></div></div>`;
   }
 
-  h+=`</tbody></table></div></div>`;
   return h;
 }
 
@@ -842,7 +765,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"\n-> Buscando {key.upper()} -- {month}/{year}")
                 data = load_funil_data(key, month, year)
                 self.send_json(data)
-                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}")
+                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  busca_paga_v={data['vendas_busca_paga']}  busca_paga_c={data['contratos_busca_paga']}")
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self.send_json({"error": str(e)}, 500)
