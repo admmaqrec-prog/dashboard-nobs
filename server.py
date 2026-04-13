@@ -542,8 +542,8 @@ function renderPane(key){
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
         <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${Object.keys(data.et).length} etapas · ${fmoney(data.valor)}</div></div>
-        <div class="resp-total" style="color:${color}">${data.ativo}</div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
+        <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
       </div><div class="resp-rows">`;
     s.etapas.forEach(e=>{const c=data.et[e.nome]||0;if(!c)return;h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:${e.cor}"></span>${e.nome}</span><span class="resp-row-val" style="color:${e.cor}">${c}</span></div>`;});
     h+=`<hr class="resp-divider">`;
@@ -554,7 +554,7 @@ function renderPane(key){
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
-    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor total</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
+    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
@@ -654,7 +654,7 @@ function renderTotal(){
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
         <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${fmoney(data.valor)}</div></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
         <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
       </div><div class="resp-rows">`;
     // contratos — clicavel para abrir/fechar lista
@@ -678,7 +678,7 @@ function renderTotal(){
       h+=`</div></div>`;
     }
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
-    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor total</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
+    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
