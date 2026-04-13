@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dashboard RD Station — Servidor local
+Dashboard RD Station — Servidor web (Render)
 Rode com: python3 server.py
-Acesse em: http://localhost:8765
+Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
 import urllib.request
@@ -793,12 +793,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    PORT = 8765
-    server = HTTPServer(("localhost", PORT), Handler)
+    import os
+    PORT = int(os.environ.get("PORT", 8765))
+    HOST = "0.0.0.0"
+    server = HTTPServer((HOST, PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
-    print(f"\n  Acesse: http://localhost:{PORT}")
+    print(f"\n  Acesse: http://{HOST}:{PORT}")
     print("  Pressione Ctrl+C para parar\n")
     try:
         server.serve_forever()
