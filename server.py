@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dashboard RD Station — Servidor web (Render)
+Dashboard RD Station — Servidor local
 Rode com: python3 server.py
-Porta definida pela variavel de ambiente PORT (padrao 8765)
+Acesse em: http://localhost:8765
 """
 import json
 import urllib.request
@@ -103,29 +103,8 @@ def get_origem(deal):
             return (cf.get("value") or "").strip()
     return ""
 
-def get_fonte(deal):
-    """Retorna o campo 'fonte' nativo do deal (ex: 'Busca Paga | Facebook Ads').
-    A API do RD Station pode retornar como 'fonte', 'source' ou dentro de deal_source."""
-    # campo direto
-    for key in ("fonte", "source"):
-        v = (deal.get(key) or "").strip()
-        if v:
-            return v
-    # campo aninhado deal_source
-    ds = deal.get("deal_source")
-    if isinstance(ds, dict):
-        return (ds.get("name") or ds.get("fonte") or ds.get("source") or "").strip()
-    # fallback: buscar em custom fields com label "fonte"
-    for cf in (deal.get("deal_custom_fields") or []):
-        lbl = (cf.get("custom_field") or {}).get("label", "")
-        if "fonte" in lbl.lower():
-            return (cf.get("value") or "").strip()
-    return ""
-
 def is_busca_paga(deal):
-    origem = get_origem(deal).lower()
-    fonte  = get_fonte(deal).lower()
-    return origem.startswith("busca paga") or fonte.startswith("busca paga")
+    return "busca" in get_origem(deal).lower()
 
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
@@ -231,20 +210,29 @@ def load_funil_data(key, month, year):
     # serializar deals com amount_total e origem para uso no front
     def slim(d, extra_fields=None):
         """Versao reduzida do deal para serializar no JSON."""
-        ds = d.get("deal_stage")
-        dlr = d.get("deal_lost_reason")
         out = {
-            "name":             d.get("name") or "",
-            "user":             user_name(d),
-            "updated_at":       d.get("updated_at") or "",
-            "closed_at":        d.get("closed_at") or "",
-            "amount_total":     d.get("amount_total") or 0,
-            "origem":           get_origem(d),
-            "fonte":            get_fonte(d),
-            "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
-            "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
+            "name":         d.get("name") or "",
+            "user":         user_name(d),
+            "updated_at":   d.get("updated_at") or "",
+            "closed_at":    d.get("closed_at") or "",
+            "amount_total": d.get("amount_total") or 0,
+            "origem":       get_origem(d),
         }
         return out
+
+    # D+1 e Hoje: todos os deals ATIVOS na etapa "Contrato enviado" agora (sem filtro de mes)
+    # o front filtra por updated_at: ontem = D+1, hoje = movidos hoje
+    cid = funil["contrato_stage_id"]
+    contrato_ativos_todos = etapas_map[cid]["deals"]  # ja sao win=None
+    contrato_ativos_slim = [
+        {
+            "name":       d.get("name") or "",
+            "user":       user_name(d),
+            "updated_at": d.get("updated_at") or "",
+            "created_at": d.get("created_at") or "",
+        }
+        for d in contrato_ativos_todos
+    ]
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
@@ -254,6 +242,7 @@ def load_funil_data(key, month, year):
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
         "contratos_busca_paga": len(contratos_busca_paga),
+        "contrato_ativos":      contrato_ativos_slim,
     }
 
 
@@ -266,11 +255,10 @@ HTML = r"""<!DOCTYPE html>
 <title>Dashboard Comercial</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c;--header-bg:rgba(13,13,15,.95)}
-html.light{--bg:#f0f2f5;--surface:#ffffff;--surface2:#e8eaed;--border:rgba(0,0,0,.09);--border2:rgba(0,0,0,.15);--text:#1a1a2e;--muted:#999;--dim:#555;--blue:#2563eb;--blue-dim:rgba(37,99,235,.1);--green:#059669;--green-dim:rgba(5,150,105,.1);--red:#dc2626;--red-dim:rgba(220,38,38,.1);--amber:#d97706;--amber-dim:rgba(217,119,6,.1);--purple:#7c3aed;--teal:#0d9488;--coral:#ea580c;--header-bg:rgba(240,242,245,.95)}
+:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;line-height:1.5}
-header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:var(--header-bg);backdrop-filter:blur(12px)}
+header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:rgba(13,13,15,.95);backdrop-filter:blur(12px)}
 .logo{display:flex;align-items:center;gap:10px}
 .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
@@ -279,8 +267,6 @@ header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;a
 .last-update{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .refresh-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 14px;border-radius:6px;font-size:12px;font-family:'Syne',sans-serif;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .2s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
-.theme-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 12px;border-radius:6px;font-size:16px;cursor:pointer;transition:all .2s;line-height:1}
-.theme-btn:hover{border-color:var(--amber);color:var(--amber)}
 .period-selector{display:flex;gap:4px}
 .period-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace;cursor:pointer;transition:all .2s}
 .period-btn.active,.period-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
@@ -374,6 +360,20 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 .total-row{display:flex;justify-content:space-between;align-items:center;padding:.4rem 0}
 .total-row-label{color:var(--dim);display:flex;align-items:center;gap:8px;font-size:12px}
 .total-row-val{font-family:'DM Mono',monospace;font-size:16px;font-weight:600}
+.d1-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:2rem}
+.d1-hd{padding:.85rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.d1-title{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);flex:1}
+.d1-badge{font-size:11px;font-family:'DM Mono',monospace;padding:2px 10px;border-radius:4px;border:1px solid;font-weight:600}
+.d1-badge.yellow{color:var(--amber);border-color:rgba(240,168,48,.4);background:var(--amber-dim)}
+.d1-badge.blue{color:var(--blue);border-color:rgba(79,143,255,.4);background:var(--blue-dim)}
+.d1-section{padding:.6rem 1.25rem .2rem;border-bottom:1px solid var(--border)}
+.d1-section:last-child{border-bottom:none}
+.d1-section-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem;font-family:'DM Mono',monospace}
+.d1-item{display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border)}
+.d1-item:last-child{border-bottom:none}
+.d1-item-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+.d1-item-user{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace}
+.d1-empty{padding:.75rem 0;font-size:12px;color:var(--muted);font-family:'DM Mono',monospace}
 </style>
 </head>
 <body>
@@ -394,7 +394,6 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
-    <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
     <button class="refresh-btn" id="rbtn" onclick="loadAll()"><span id="rspin">&#8635;</span> Atualizar</button>
   </div>
 </header>
@@ -413,14 +412,6 @@ let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
-
-function toggleTheme(){
-  const isLight=document.documentElement.classList.toggle('light');
-  document.getElementById('tbtn').textContent=isLight?'🌑':'🌙';
-  localStorage.setItem('theme',isLight?'light':'dark');
-}
-// restaurar tema salvo
-(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');document.getElementById('tbtn').textContent='🌑';}})();
 
 function workdaysInMonth(m,y){const days=new Date(y,m,0).getDate();let w=0;for(let d=1;d<=days;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
 function workdaysUntilToday(m,y){const today=new Date();const isCurrent=(today.getMonth()+1===m&&today.getFullYear()===y);const last=isCurrent?today.getDate():new Date(y,m,0).getDate();let w=0;for(let d=1;d<=last;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
@@ -530,18 +521,20 @@ function renderPane(key){
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:24px">${fmoney(s.etapas.reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma das etapas do mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
 
+  h+=renderD1(key==='rp'?s.contrato_ativos:[], key==='rrr'?s.contrato_ativos:[]);
+
   // responsaveis
   const umap={};
-  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
+  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;umap[u].valor+=(d.amount_total||0);}));
   s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].vendas.push(d);umap[u].valor+=(d.amount_total||0);});
   if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
   s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
@@ -554,8 +547,8 @@ function renderPane(key){
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
         <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
-        <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${Object.keys(data.et).length} etapas · ${fmoney(data.valor)}</div></div>
+        <div class="resp-total" style="color:${color}">${data.ativo}</div>
       </div><div class="resp-rows">`;
     s.etapas.forEach(e=>{const c=data.et[e.nome]||0;if(!c)return;h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:${e.cor}"></span>${e.nome}</span><span class="resp-row-val" style="color:${e.cor}">${c}</span></div>`;});
     h+=`<hr class="resp-divider">`;
@@ -566,7 +559,6 @@ function renderPane(key){
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
-    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
@@ -621,11 +613,11 @@ function renderTotal(){
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
-    <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.vendas,...rrr.vendas].reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
   </div>`;
 
   // split RP x RRR
@@ -647,7 +639,7 @@ function renderTotal(){
 
   // responsaveis totais — PRIMEIRO, com listas colapsaveis
   const umap={};
-  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
+  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);umap[u].valor+=(d.amount_total||0);}}
   rp.vendas.forEach(d=>addU(uname(d),'vendas',d));
   rrr.vendas.forEach(d=>addU(uname(d),'vendas',d));
   if(rp.contratos_mes)rp.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
@@ -666,7 +658,7 @@ function renderTotal(){
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
         <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${fmoney(data.valor)}</div></div>
         <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
       </div><div class="resp-rows">`;
     // contratos — clicavel para abrir/fechar lista
@@ -690,7 +682,6 @@ function renderTotal(){
       h+=`</div></div>`;
     }
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
-    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
@@ -699,21 +690,48 @@ function renderTotal(){
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
   h+=renderFeed(feedCombo,2);
 
-  // perdas combinadas com motivos
-  const todasPerdas=[...rp.perdas,...rrr.perdas];
-  const mmapT={};todasPerdas.forEach(d=>{const m=d.deal_lost_reason?.name||'--';mmapT[m]=(mmapT[m]||0)+1;});
-  const msortedT=Object.entries(mmapT).sort((a,b)=>b[1]-a[1]);
-  h+=`<div class="section-hd" style="margin-top:2rem"><h3>Perdas - ambos funis</h3><span class="cnt red">${totP} total</span><div class="section-line"></div></div>`;
-  h+=`<div class="motivos-grid">`+msortedT.map(([m,c])=>`<div class="mc"><span class="mc-n">${m}</span><span class="mc-v">${c}</span></div>`).join('')+`</div>`;
-  if(totP){
-    h+=`<div class="stage-row" id="perdas-total" style="margin-bottom:2rem"><div class="stage-header" onclick="tog('perdas-total')"><div class="stage-color" style="background:var(--red)"></div><span class="stage-name">Negociacoes perdidas</span><span class="stage-count" style="color:var(--red)">${totP}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Motivo</th></tr></thead><tbody>`;
-    [...rp.perdas.map(d=>({...d,_funil:'RP'})),...rrr.perdas.map(d=>({...d,_funil:'RRR'}))].forEach(d=>{
-      const m=d.deal_lost_reason?.name||'--';
-      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._funil}</td><td class="dd">${d.deal_stage?.name||'--'}</td><td><span class="pill">${m}</span></td></tr>`;
-    });
-    h+=`</tbody></table></div></div>`;
-  }
+  h+=renderD1(rp.contrato_ativos, rrr.contrato_ativos);
 
+  return h;
+}
+
+function renderD1(rpAtivos, rrrAtivos){
+  const now=new Date();
+  const todayStr=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const yd=new Date(now);yd.setDate(yd.getDate()-1);
+  const yesterdayStr=`${yd.getFullYear()}-${String(yd.getMonth()+1).padStart(2,'0')}-${String(yd.getDate()).padStart(2,'0')}`;
+
+  // combinar ambos os funis com tag
+  const allAtivos=[
+    ...(rpAtivos||[]).map(d=>({...d,_funil:'RP'})),
+    ...(rrrAtivos||[]).map(d=>({...d,_funil:'RRR'}))
+  ];
+
+  // D+1: updated_at == ontem (permanecem na etapa desde ontem)
+  const d1=allAtivos.filter(d=>(d.updated_at||'').startsWith(yesterdayStr));
+  // Hoje: updated_at == hoje (movidos hoje para contrato enviado)
+  const dHoje=allAtivos.filter(d=>(d.updated_at||'').startsWith(todayStr));
+
+  let h=`<div class="d1-wrap">
+    <div class="d1-hd">
+      <span class="d1-title">&#9200; Contrato enviado — Acompanhamento diario</span>
+      <span class="d1-badge yellow">D+1: ${d1.length} aguardando</span>
+      <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
+    </div>`;
+
+  // secao D+1
+  h+=`<div class="d1-section"><div class="d1-section-label">D+1 — Enviados ontem, aguardando assinatura</div>`;
+  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando desde ontem</div>`;}
+  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--amber);font-family:'DM Mono',monospace;white-space:nowrap">desde ontem</span></div>`;});}
+  h+=`</div>`;
+
+  // secao Hoje
+  h+=`<div class="d1-section"><div class="d1-section-label">Movidos para contrato enviado hoje</div>`;
+  if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
+  else{dHoje.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-item-name">${d.name||'--'}</div><div class="d1-item-user">${d.user||'--'} · ${d._funil}</div></div><span style="font-size:10px;color:var(--blue);font-family:'DM Mono',monospace;white-space:nowrap">hoje</span></div>`;});}
+  h+=`</div>`;
+
+  h+=`</div>`;
   return h;
 }
 
@@ -765,7 +783,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"\n-> Buscando {key.upper()} -- {month}/{year}")
                 data = load_funil_data(key, month, year)
                 self.send_json(data)
-                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  busca_paga_v={data['vendas_busca_paga']}  busca_paga_c={data['contratos_busca_paga']}")
+                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}")
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self.send_json({"error": str(e)}, 500)
@@ -775,14 +793,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import os
-    PORT = int(os.environ.get("PORT", 8765))
-    HOST = "0.0.0.0"
-    server = HTTPServer((HOST, PORT), Handler)
+    PORT = 8765
+    server = HTTPServer(("localhost", PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
-    print(f"\n  Acesse: http://{HOST}:{PORT}")
+    print(f"\n  Acesse: http://localhost:{PORT}")
     print("  Pressione Ctrl+C para parar\n")
     try:
         server.serve_forever()
