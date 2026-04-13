@@ -266,10 +266,11 @@ HTML = r"""<!DOCTYPE html>
 <title>Dashboard Comercial</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c}
+:root{--bg:#0d0d0f;--surface:#141416;--surface2:#1a1a1e;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);--text:#f0f0f0;--muted:#666;--dim:#888;--blue:#4f8fff;--blue-dim:rgba(79,143,255,.12);--green:#3ecf8e;--green-dim:rgba(62,207,142,.12);--red:#f06060;--red-dim:rgba(240,96,96,.12);--amber:#f0a830;--amber-dim:rgba(240,168,48,.12);--purple:#a78bfa;--teal:#2dd4bf;--coral:#fb923c;--header-bg:rgba(13,13,15,.95)}
+html.light{--bg:#f0f2f5;--surface:#ffffff;--surface2:#e8eaed;--border:rgba(0,0,0,.09);--border2:rgba(0,0,0,.15);--text:#1a1a2e;--muted:#999;--dim:#555;--blue:#2563eb;--blue-dim:rgba(37,99,235,.1);--green:#059669;--green-dim:rgba(5,150,105,.1);--red:#dc2626;--red-dim:rgba(220,38,38,.1);--amber:#d97706;--amber-dim:rgba(217,119,6,.1);--purple:#7c3aed;--teal:#0d9488;--coral:#ea580c;--header-bg:rgba(240,242,245,.95)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;line-height:1.5}
-header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:rgba(13,13,15,.95);backdrop-filter:blur(12px)}
+header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;background:var(--header-bg);backdrop-filter:blur(12px)}
 .logo{display:flex;align-items:center;gap:10px}
 .logo-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
@@ -278,6 +279,8 @@ header{border-bottom:1px solid var(--border);padding:1.25rem 2rem;display:flex;a
 .last-update{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .refresh-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 14px;border-radius:6px;font-size:12px;font-family:'Syne',sans-serif;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .2s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
+.theme-btn{background:var(--surface2);border:1px solid var(--border2);color:var(--dim);padding:6px 12px;border-radius:6px;font-size:16px;cursor:pointer;transition:all .2s;line-height:1}
+.theme-btn:hover{border-color:var(--amber);color:var(--amber)}
 .period-selector{display:flex;gap:4px}
 .period-btn{background:transparent;border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace;cursor:pointer;transition:all .2s}
 .period-btn.active,.period-btn:hover{border-color:var(--blue);color:var(--blue);background:var(--blue-dim)}
@@ -391,6 +394,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     </div>
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
+    <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">🌙</button>
     <button class="refresh-btn" id="rbtn" onclick="loadAll()"><span id="rspin">&#8635;</span> Atualizar</button>
   </div>
 </header>
@@ -409,6 +413,14 @@ let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
+
+function toggleTheme(){
+  const isLight=document.documentElement.classList.toggle('light');
+  document.getElementById('tbtn').textContent=isLight?'🌑':'🌙';
+  localStorage.setItem('theme',isLight?'light':'dark');
+}
+// restaurar tema salvo
+(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');document.getElementById('tbtn').textContent='🌑';}})();
 
 function workdaysInMonth(m,y){const days=new Date(y,m,0).getDate();let w=0;for(let d=1;d<=days;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
 function workdaysUntilToday(m,y){const today=new Date();const isCurrent=(today.getMonth()+1===m&&today.getFullYear()===y);const last=isCurrent?today.getDate():new Date(y,m,0).getDate();let w=0;for(let d=1;d<=last;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
