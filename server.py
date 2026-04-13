@@ -741,12 +741,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    PORT = 8765
-    server = HTTPServer(("localhost", PORT), Handler)
+    import os
+    PORT = int(os.environ.get("PORT", 8765))
+    HOST = "0.0.0.0"
+    server = HTTPServer((HOST, PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
-    print(f"\n  Acesse: http://localhost:{PORT}")
+    print(f"\n  Acesse: http://{HOST}:{PORT}")
     print("  Pressione Ctrl+C para parar\n")
     try:
         server.serve_forever()
