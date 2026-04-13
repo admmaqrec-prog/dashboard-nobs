@@ -104,7 +104,7 @@ def get_origem(deal):
     return ""
 
 def is_busca_paga(deal):
-    return "busca" in get_origem(deal).lower()
+    return get_origem(deal).lower().startswith("busca paga")
 
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
@@ -210,13 +210,17 @@ def load_funil_data(key, month, year):
     # serializar deals com amount_total e origem para uso no front
     def slim(d, extra_fields=None):
         """Versao reduzida do deal para serializar no JSON."""
+        ds = d.get("deal_stage")
+        dlr = d.get("deal_lost_reason")
         out = {
-            "name":         d.get("name") or "",
-            "user":         user_name(d),
-            "updated_at":   d.get("updated_at") or "",
-            "closed_at":    d.get("closed_at") or "",
-            "amount_total": d.get("amount_total") or 0,
-            "origem":       get_origem(d),
+            "name":             d.get("name") or "",
+            "user":             user_name(d),
+            "updated_at":       d.get("updated_at") or "",
+            "closed_at":        d.get("closed_at") or "",
+            "amount_total":     d.get("amount_total") or 0,
+            "origem":           get_origem(d),
+            "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
+            "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
         }
         return out
 
@@ -528,6 +532,7 @@ function renderPane(key){
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
+    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor total</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
@@ -651,6 +656,7 @@ function renderTotal(){
       h+=`</div></div>`;
     }
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
+    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor total</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
     </div></div>`;
   });
   h+=`</div>`;
@@ -658,6 +664,21 @@ function renderTotal(){
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
   h+=renderFeed(feedCombo,2);
+
+  // perdas combinadas com motivos
+  const todasPerdas=[...rp.perdas,...rrr.perdas];
+  const mmapT={};todasPerdas.forEach(d=>{const m=d.deal_lost_reason?.name||'--';mmapT[m]=(mmapT[m]||0)+1;});
+  const msortedT=Object.entries(mmapT).sort((a,b)=>b[1]-a[1]);
+  h+=`<div class="section-hd" style="margin-top:2rem"><h3>Perdas - ambos funis</h3><span class="cnt red">${totP} total</span><div class="section-line"></div></div>`;
+  h+=`<div class="motivos-grid">`+msortedT.map(([m,c])=>`<div class="mc"><span class="mc-n">${m}</span><span class="mc-v">${c}</span></div>`).join('')+`</div>`;
+  if(totP){
+    h+=`<div class="stage-row" id="perdas-total" style="margin-bottom:2rem"><div class="stage-header" onclick="tog('perdas-total')"><div class="stage-color" style="background:var(--red)"></div><span class="stage-name">Negociacoes perdidas</span><span class="stage-count" style="color:var(--red)">${totP}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Motivo</th></tr></thead><tbody>`;
+    [...rp.perdas.map(d=>({...d,_funil:'RP'})),...rrr.perdas.map(d=>({...d,_funil:'RRR'}))].forEach(d=>{
+      const m=d.deal_lost_reason?.name||'--';
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._funil}</td><td class="dd">${d.deal_stage?.name||'--'}</td><td><span class="pill">${m}</span></td></tr>`;
+    });
+    h+=`</tbody></table></div></div>`;
+  }
 
   return h;
 }
@@ -720,14 +741,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import os
-    PORT = int(os.environ.get("PORT", 8765))
-    HOST = "0.0.0.0"
-    server = HTTPServer((HOST, PORT), Handler)
+    PORT = 8765
+    server = HTTPServer(("localhost", PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
-    print(f"\n  Acesse: http://{HOST}:{PORT}")
+    print(f"\n  Acesse: http://localhost:{PORT}")
     print("  Pressione Ctrl+C para parar\n")
     try:
         server.serve_forever()
