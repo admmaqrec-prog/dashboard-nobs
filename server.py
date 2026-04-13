@@ -522,7 +522,7 @@ function renderPane(key){
     <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:24px">${fmoney(s.etapas.reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma das etapas do mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total vendas no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
@@ -613,7 +613,7 @@ function renderTotal(){
     <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total vendas no mes</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.vendas,...rrr.vendas].reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>
   </div>`;
 
   // split RP x RRR
