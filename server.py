@@ -534,7 +534,7 @@ function renderPane(key){
     <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card green"><div class="sc-label">Valor total vendas no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
+    <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
