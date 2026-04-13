@@ -137,23 +137,24 @@ def load_funil_data(key, month, year):
         elif kind == "lost":
             todas_perdas.extend(result)
 
-    # FIX 1: filtrar etapas ativas pelo mes selecionado (updated_at)
+    # FIX 1: filtrar etapas ativas pelo mes selecionado usando created_at
+    # created_at = quando o deal foi criado/chegou ao funil — proxy correto para mes de entrada
     etapas_data = []
     for e in funil["etapas"]:
         all_active = etapas_map[e["id"]]["deals"]
-        mes_active = [d for d in all_active if in_month(d, month, year, "updated_at")]
+        mes_active = [d for d in all_active if in_month(d, month, year, "created_at")]
         etapas_data.append({**e, "deals": mes_active})
 
     # vendas do mes (pelo closed_at)
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
-    # FIX 2: contratos do mes — todos que passaram pela etapa no mes (updated_at)
-    # inclui ativos, ganhos e perdidos na etapa de contrato
+    # FIX 2: contratos do mes — deals criados no mes que passaram pela etapa de contrato
+    # ativos na etapa agora com created_at no mes + ganhos/perdidos com created_at no mes
     contrato_active_mes = [d for d in etapas_map[funil["contrato_stage_id"]]["deals"]
-                           if in_month(d, month, year, "updated_at")]
+                           if in_month(d, month, year, "created_at")]
     contrato_ok_mes     = [d for d in contrato_all
-                           if in_month(d, month, year, "updated_at")]
+                           if in_month(d, month, year, "created_at")]
     # deduplicar por _id
     seen = set()
     contratos_mes = []
@@ -163,8 +164,9 @@ def load_funil_data(key, month, year):
             seen.add(did)
             contratos_mes.append(d)
 
-    # FIX 3: vendas por busca paga (campo custom "Origem especifica" contendo "busca")
-    vendas_busca_paga = [d for d in vendas_mes if is_busca_paga(d)]
+    # FIX 3: vendas e contratos por busca paga
+    vendas_busca_paga    = [d for d in vendas_mes if is_busca_paga(d)]
+    contratos_busca_paga = [d for d in contratos_mes if is_busca_paga(d)]
 
     # ── feed de movimentacoes recentes ────────────────────────────────────────
     feed_candidates = []
@@ -219,12 +221,13 @@ def load_funil_data(key, month, year):
         return out
 
     return {
-        "etapas":           [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
-        "vendas":           [slim(d) for d in vendas_mes],
-        "contratos_mes":    [slim(d) for d in contratos_mes],
-        "perdas":           [slim(d) for d in todas_perdas],
-        "feed":             feed_candidates[:60],
-        "vendas_busca_paga": len(vendas_busca_paga),
+        "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
+        "vendas":               [slim(d) for d in vendas_mes],
+        "contratos_mes":        [slim(d) for d in contratos_mes],
+        "perdas":               [slim(d) for d in todas_perdas],
+        "feed":                 feed_candidates[:60],
+        "vendas_busca_paga":    len(vendas_busca_paga),
+        "contratos_busca_paga": len(contratos_busca_paga),
     }
 
 
@@ -490,6 +493,9 @@ function renderPane(key){
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:24px">${fmoney(s.etapas.reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma das etapas do mes</div></div>
   </div>`;
 
@@ -566,7 +572,8 @@ function renderTotal(){
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
 
-  const totBuscaPaga=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
+  const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
+  const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
   let h=`<div class="summary-grid-5">
     <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">no mes selecionado</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
@@ -575,7 +582,10 @@ function renderTotal(){
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
-    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPaga}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card purple"><div class="sc-label">Vendas por busca paga</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
+    <div class="summary-card purple"><div class="sc-label">Contratos por busca paga</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total negociacoes ativas</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.etapas,...rrr.etapas].reduce((a,e)=>a+e.deals.reduce((b,d)=>b+(d.amount_total||0),0),0))}</div><div class="sc-sub">soma de todas as etapas do mes</div></div>
   </div>`;
 
