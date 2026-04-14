@@ -261,29 +261,46 @@ def load_funil_data(key, month, year):
     prev_wd_str = str(prev_wd)   # "YYYY-MM-DD"
     today_str   = str(today)     # "YYYY-MM-DD"
 
+    # Logar todos os campos do primeiro deal para descobrir campo de data de entrada na etapa
+    if ativos_contrato:
+        sample = ativos_contrato[0]
+        date_fields = {k: v for k, v in sample.items()
+                       if isinstance(v, str) and ("at" in k or "date" in k or "stage" in k or "update" in k or "creat" in k)}
+        print(f"   [DEBUG DATE FIELDS] {date_fields}")
+        ds = sample.get("deal_stage")
+        if isinstance(ds, dict):
+            print(f"   [DEBUG DEAL_STAGE] {ds}")
+
     def get_stage_date(d):
-        # campo que indica quando o deal entrou na etapa atual
-        # RD Station retorna como deal_stage_updated_at ou dentro de last_stage_update
-        v = (d.get("deal_stage_updated_at")
-             or d.get("last_stage_update")
-             or d.get("stage_updated_at")
-             or "")
-        if not v:
-            # fallback: created_at do deal_stage se disponivel
-            ds = d.get("deal_stage")
-            if isinstance(ds, dict):
-                v = ds.get("updated_at") or ds.get("created_at") or ""
-        return v[:10]  # pegar so YYYY-MM-DD
+        # tentar varios campos possiveis da API RD Station
+        candidates = [
+            d.get("deal_stage_updated_at"),
+            d.get("last_stage_update"),
+            d.get("stage_updated_at"),
+            d.get("deal_stage_changed_at"),
+            d.get("moved_at"),
+        ]
+        ds = d.get("deal_stage")
+        if isinstance(ds, dict):
+            candidates += [ds.get("updated_at"), ds.get("created_at"), ds.get("entered_at")]
+        for v in candidates:
+            if v:
+                return v[:10]
+        return ""
 
     def slim_d1(d):
         return {
             "name":       d.get("name") or "",
             "user":       user_name(d),
             "stage_date": get_stage_date(d),
+            "updated_at": d.get("updated_at") or "",
         }
 
     contrato_d1   = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == prev_wd_str]
     contrato_hoje = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == today_str]
+    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)} total_ativos={len(ativos_contrato)}")
+    if ativos_contrato:
+        print(f"   [DEBUG SAMPLE stage_date] {get_stage_date(ativos_contrato[0])!r}")
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
@@ -871,7 +888,7 @@ loadAll();
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        print(f"  {args[0]} {args[1]} {args[2]}")
+        print(f"  {' '.join(str(a) for a in args)}")
 
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode()
