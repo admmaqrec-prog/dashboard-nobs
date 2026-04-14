@@ -231,52 +231,48 @@ def load_funil_data(key, month, year):
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
-    # ── CONTRATOS DO MES (alteracao #1) ──────────────────────────────────────
-    # Um deal conta como "contrato do mes" se foi movido para a etapa
-    # "Contrato enviado" dentro do mes selecionado — independente de onde esteja agora.
-    #
-    # Coleta todos os deals de todas as etapas pos-contrato (ativas) +
-    # deals vendidos (ok) que teriam passado pelo contrato.
-    # O filtro e feito pela data de entrada no contrato (get_contrato_entry_date).
+    # ── CONTRATOS DO MES ──────────────────────────────────────────────────────
+    # Conta como "contrato do mes" qualquer deal que:
+    #   - Esteja em qualquer etapa pos-contrato (Contrato enviado, Assinatura,
+    #     Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4) OU vendido (OK)
+    #   - E cujo updated_at caia no mes selecionado
+    #     (proxy para "quando foi movido para/apos contrato enviado")
+    # Para deals vendidos usa closed_at se disponivel, senao updated_at.
     seen_contrato = set()
     contratos_mes = []
 
-    # Deals atualmente nas etapas pos-contrato (incluindo a propria etapa "Contrato enviado")
     all_postcontrato_deals = []
     for sid, deals in postcontrato_pool.items():
         all_postcontrato_deals.extend(deals)
-    # Adicionar deals vendidos (que saem do funil com win=True)
     all_postcontrato_deals.extend(ok_deals)
 
     for d in all_postcontrato_deals:
-        entry_date = get_contrato_entry_date(d)
-        if not entry_date:
+        # Para vendidos, priorizar closed_at; para demais, updated_at
+        if d.get("win") is True:
+            ref_field = "closed_at" if d.get("closed_at") else "updated_at"
+        else:
+            ref_field = "updated_at"
+        if not in_month(d, month, year, ref_field):
             continue
-        try:
-            dt = datetime.date.fromisoformat(entry_date)
-        except Exception:
-            continue
-        if dt.month == month and dt.year == year:
-            did = d.get("_id") or d.get("id")
-            if did and did not in seen_contrato:
-                seen_contrato.add(did)
-                contratos_mes.append(d)
+        did = d.get("_id") or d.get("id")
+        if did and did not in seen_contrato:
+            seen_contrato.add(did)
+            contratos_mes.append(d)
 
-    # ── EM ANDAMENTO = etapas pre-contrato no mes, sem contrato ainda (alteracao #3) ──
-    # Negociacoes que chegaram a "Desenvolvimento" ou "Tem perfil" no mes selecionado
-    # (pelo created_at) e que ainda nao avancaram para contrato.
+    # ── EM ANDAMENTO: negociacoes nas etapas Desenvolvimento / Tem perfil ────────
+    # Permanece nessas etapas E foi movido (updated_at) no mes selecionado.
+    # Nao filtra por "sem contrato" — inclui todas que estao nessas etapas no mes.
     em_andamento = []
+    seen_ea = set()
     for nome_lower, info in pre_contrato_map.items():
         deals = info.get("deals") or []
         for d in deals:
-            if not in_month(d, month, year, "created_at"):
-                continue
-            if d.get("win") is not None:  # ja vendido ou perdido
+            if not in_month(d, month, year, "updated_at"):
                 continue
             did = d.get("_id") or d.get("id")
-            if did in seen_contrato:  # ja foi para contrato
-                continue
-            em_andamento.append({**d, "_pre_stage": nome_lower})
+            if did and did not in seen_ea:
+                seen_ea.add(did)
+                em_andamento.append({**d, "_pre_stage": nome_lower})
 
     # ── busca paga ────────────────────────────────────────────────────────────
     vendas_busca_paga    = [d for d in vendas_mes if is_busca_paga(d)]
@@ -668,7 +664,7 @@ function renderPane(key){
   const msorted=Object.entries(mmap).sort((a,b)=>b[1]-a[1]);
 
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">Desenv. / Tem perfil · sem contrato</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">no mes</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">${wdD} dias uteis decorridos</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
@@ -683,7 +679,6 @@ function renderPane(key){
   </div>`;
 
   h+=renderFeed(s.feed,15);
-  h+=renderD1(key==='rp'?s.contrato_d1:[],key==='rrr'?s.contrato_d1:[],key==='rp'?s.contrato_hoje:[],key==='rrr'?s.contrato_hoje:[],key);
 
   // responsaveis
   const umap={};
@@ -718,14 +713,15 @@ function renderPane(key){
   });
   h+=`</div>`;
 
-  // em andamento (pre-contrato)
+  // em andamento — Desenvolvimento / Tem perfil
   const eaList=s.em_andamento||[];
-  if(eaList.length){
-    h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenv./Tem perfil sem contrato</h3><span class="cnt blue">${eaList.length} negociacoes</span><div class="section-line"></div></div>`;
-    h+=`<div class="stage-row" id="ea-${key}"><div class="stage-header" onclick="tog('ea-${key}')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Em andamento (pre-contrato) — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaList.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Entrada</th></tr></thead><tbody>`;
+  h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenvolvimento / Tem perfil</h3><span class="cnt blue">${eaList.length} negociacoes</span><div class="section-line"></div></div>`;
+  if(!eaList.length){h+=`<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>`;}
+  else{
+    h+=`<div class="stage-row" id="ea-${key}"><div class="stage-header" onclick="tog('ea-${key}')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaList.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>`;
     eaList.forEach(d=>{
       const stgName=d.deal_stage?.name||d._pre_stage||'--';
-      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.created_at||d.updated_at)}</td></tr>`;
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.updated_at)}</td></tr>`;
     });
     h+=`</tbody></table></div></div>`;
   }
@@ -775,7 +771,7 @@ function renderTotal(){
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">Desenv. / Tem perfil · sem contrato</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
@@ -795,16 +791,31 @@ function renderTotal(){
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RP</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rpC}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rpV}</span></div>
-      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento (pre-contrato)</span><span class="total-row-val" style="color:var(--dim)">${rpA}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento (Desenv./Tem perfil)</span><span class="total-row-val" style="color:var(--blue)">${rpA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
     </div>
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RRR Mae</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rrrC}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rrrV}</span></div>
-      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento (pre-contrato)</span><span class="total-row-val" style="color:var(--dim)">${rrrA}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento (Desenv./Tem perfil)</span><span class="total-row-val" style="color:var(--blue)">${rrrA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
     </div>
   </div>`;
+
+  // em andamento — Desenvolvimento / Tem perfil (ambos funis)
+  const eaRP=(rp.em_andamento||[]).map(d=>({...d,_f:'RP'}));
+  const eaRRR=(rrr.em_andamento||[]).map(d=>({...d,_f:'RRR'}));
+  const eaTot=[...eaRP,...eaRRR];
+  h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenvolvimento / Tem perfil</h3><span class="cnt blue">${eaTot.length} negociacoes</span><div class="section-line"></div></div>`;
+  if(!eaTot.length){h+=`<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>`;}
+  else{
+    h+=`<div class="stage-row" id="ea-total"><div class="stage-header" onclick="tog('ea-total')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaTot.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>`;
+    eaTot.forEach(d=>{
+      const stgName=d.deal_stage?.name||d._pre_stage||'--';
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._f}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.updated_at)}</td></tr>`;
+    });
+    h+=`</tbody></table></div></div>`;
+  }
 
   // responsaveis totais — PRIMEIRO, com listas colapsaveis
   const umap={};
@@ -855,20 +866,6 @@ function renderTotal(){
     </div></div>`;
   });
   h+=`</div>`;
-
-  // em andamento combinado (pre-contrato) — ambos funis
-  const eaRP=(rp.em_andamento||[]).map(d=>({...d,_f:'RP'}));
-  const eaRRR=(rrr.em_andamento||[]).map(d=>({...d,_f:'RRR'}));
-  const eaTot=[...eaRP,...eaRRR];
-  if(eaTot.length){
-    h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenv./Tem perfil sem contrato · ambos funis</h3><span class="cnt blue">${eaTot.length} negociacoes</span><div class="section-line"></div></div>`;
-    h+=`<div class="stage-row" id="ea-total"><div class="stage-header" onclick="tog('ea-total')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Em andamento (pre-contrato) — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaTot.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Entrada</th></tr></thead><tbody>`;
-    eaTot.forEach(d=>{
-      const stgName=d.deal_stage?.name||d._pre_stage||'--';
-      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._f}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.created_at||d.updated_at)}</td></tr>`;
-    });
-    h+=`</tbody></table></div></div>`;
-  }
 
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
