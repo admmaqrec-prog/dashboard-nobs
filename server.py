@@ -246,40 +246,44 @@ def load_funil_data(key, month, year):
         }
         return out
 
-    # D+1 e Hoje: buscar deals ativos na etapa contrato enviado filtrados por data
-    # usando updated_after/updated_before para pegar apenas os movidos naquele dia
+    # D+1 e Hoje: filtrar deals ativos na etapa contrato enviado
+    # pelo campo deal_stage_updated_at = quando o deal ENTROU nessa etapa (nao o updated_at geral)
     cid = funil["contrato_stage_id"]
+    ativos_contrato = [d for d in etapas_map[cid]["deals"] if d.get("win") is None]
 
     today = datetime.date.today()
-    weekday = today.weekday()  # 0=segunda, 5=sabado, 6=domingo
-    # ultimo dia util anterior
-    if weekday == 0:      # segunda -> sexta
-        prev_wd = today - datetime.timedelta(days=3)
-    elif weekday == 6:    # domingo -> sexta
-        prev_wd = today - datetime.timedelta(days=2)
-    elif weekday == 5:    # sabado -> sexta
-        prev_wd = today - datetime.timedelta(days=1)
+    weekday = today.weekday()  # 0=segunda
+    if weekday == 0:
+        prev_wd = today - datetime.timedelta(days=3)  # segunda -> sexta
     else:
         prev_wd = today - datetime.timedelta(days=1)
 
-    def fetch_contrato_by_date(date):
-        """Busca deals ATIVOS na etapa contrato enviado atualizados numa data especifica."""
-        after  = f"{date}T00:00:00-03:00"
-        before = f"{date}T23:59:59-03:00"
-        extra  = f"&updated_after={urllib.parse.quote(after)}&updated_before={urllib.parse.quote(before)}"
-        return [d for d in fetch_all(pid, cid, extra) if d.get("win") is None]
+    prev_wd_str = str(prev_wd)   # "YYYY-MM-DD"
+    today_str   = str(today)     # "YYYY-MM-DD"
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        fut_d1   = ex.submit(fetch_contrato_by_date, prev_wd)
-        fut_hoje = ex.submit(fetch_contrato_by_date, today)
-        d1_deals   = fut_d1.result()
-        hoje_deals = fut_hoje.result()
+    def get_stage_date(d):
+        # campo que indica quando o deal entrou na etapa atual
+        # RD Station retorna como deal_stage_updated_at ou dentro de last_stage_update
+        v = (d.get("deal_stage_updated_at")
+             or d.get("last_stage_update")
+             or d.get("stage_updated_at")
+             or "")
+        if not v:
+            # fallback: created_at do deal_stage se disponivel
+            ds = d.get("deal_stage")
+            if isinstance(ds, dict):
+                v = ds.get("updated_at") or ds.get("created_at") or ""
+        return v[:10]  # pegar so YYYY-MM-DD
 
     def slim_d1(d):
-        return {"name": d.get("name") or "", "user": user_name(d), "updated_at": d.get("updated_at") or ""}
+        return {
+            "name":       d.get("name") or "",
+            "user":       user_name(d),
+            "stage_date": get_stage_date(d),
+        }
 
-    contrato_d1   = [slim_d1(d) for d in d1_deals]
-    contrato_hoje = [slim_d1(d) for d in hoje_deals]
+    contrato_d1   = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == prev_wd_str]
+    contrato_hoje = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == today_str]
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
@@ -899,7 +903,13 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"\n-> Buscando {key.upper()} -- {month}/{year}")
                 data = load_funil_data(key, month, year)
                 self.send_json(data)
-                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  busca_paga_v={data['vendas_busca_paga']}  busca_paga_c={data['contratos_busca_paga']}")
+                print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  d1={len(data['contrato_d1'])}  hoje={len(data['contrato_hoje'])}")
+                # debug: mostrar campos de data do primeiro deal de contrato ativo
+                if key == "rp" and data.get("contrato_d1"):
+                    import pprint
+                    print("   [DEBUG] exemplo d1:", data["contrato_d1"][0])
+                elif key == "rp" and data.get("contrato_hoje"):
+                    print("   [DEBUG] exemplo hoje:", data["contrato_hoje"][0])
             except Exception as e:
                 import traceback; traceback.print_exc()
                 self.send_json({"error": str(e)}, 500)
