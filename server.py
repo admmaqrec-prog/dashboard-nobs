@@ -430,6 +430,14 @@ def load_funil_data(key, month, year):
         except Exception:
             prfb_ativos = []
 
+    # ── NOVOS: contagens do dia para os 3 cards principais ──
+    vendas_hoje_total       = len([d for d in vendas_mes
+                                   if (d.get("closed_at") or "")[:10] == today_str])
+    contratos_hoje_total    = len([d for d in contratos_mes
+                                   if get_custom_date(d, "Data do contrato") == today_str])
+    assinaturas_hoje_total  = len([d for d in assinaturas_mes
+                                   if get_custom_date(d, "Data da assinatura") == today_str])
+
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
         "vendas":               [slim(d) for d in vendas_mes],
@@ -443,6 +451,10 @@ def load_funil_data(key, month, year):
         "contrato_d1":          contrato_d1,
         "contrato_hoje":        contrato_hoje,
         "prfb_ativos":          len(prfb_ativos),
+        # Novos campos para contagem do dia
+        "vendas_hoje_total":      vendas_hoje_total,
+        "contratos_hoje_total":   contratos_hoje_total,
+        "assinaturas_hoje_total": assinaturas_hoje_total,
     }
 
 
@@ -493,6 +505,7 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .sc-val{font-size:38px;font-weight:700;line-height:1;margin-bottom:.3rem}
 .sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}.sc-val.teal{color:var(--teal)}.sc-val.coral{color:var(--coral)}
 .sc-sub{font-size:12px;color:var(--dim);font-family:'DM Mono',monospace}
+.sc-hoje{display:inline-flex;align-items:center;gap:5px;margin-top:.45rem;font-size:11px;font-family:'DM Mono',monospace;padding:3px 9px;border-radius:4px;border:1px solid}
 .section-hd{display:flex;align-items:center;gap:10px;margin-bottom:1rem}
 .section-hd h3{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .cnt{font-size:11px;font-family:'DM Mono',monospace;padding:2px 8px;border-radius:4px;border:1px solid}
@@ -824,6 +837,11 @@ function renderPane(key){
   return h;
 }
 
+function hojeTag(n,color,borderColor,bgColor){
+  if(!n&&n!==0)return'';
+  return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#9679; '+n+' hoje</div>';
+}
+
 function renderTotal(){
   const rp=STATE.rp,rrr=STATE.rrr;if(!rp||!rrr)return'';
   const rpV=rp.vendas.length,rrrV=rrr.vendas.length,totV=rpV+rrrV;
@@ -837,20 +855,30 @@ function renderTotal(){
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
 
+  // Contagens do dia (soma dos dois funis)
+  const contratosHoje=(rp.contratos_hoje_total||0)+(rrr.contratos_hoje_total||0);
+  const assinHoje=(rp.assinaturas_hoje_total||0)+(rrr.assinaturas_hoje_total||0);
+  const vendasHoje=(rp.vendas_hoje_total||0)+(rrr.vendas_hoje_total||0);
+
+  // MUDANÇA 1: 1ª linha = cards hero (contratos, assinaturas, vendas) com "X hoje"
+  // MUDANÇA 2: 2ª linha = mídia social (purple), antes dos 4 cards secundários
+  // 3ª linha = 4 cards secundários (em andamento, PRFB, projeção, perdas)
   let h='<div class="total-hero">'
-    +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div></div>'
-    +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div></div>'
-    +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div></div>'
+    +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div>'+hojeTag(contratosHoje,'var(--blue)','rgba(79,143,255,.35)','rgba(79,143,255,.1)')+'</div>'
+    +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
+    +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div>'+hojeTag(vendasHoje,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+'</div>'
     +'</div>'
+    // 2ª linha: mídia social (trocada de lugar)
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">'
+    +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
+    +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+totBuscaPagaC+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
+    +'</div>'
+    // 3ª linha: 4 cards secundários
     +'<div class="total-secondary">'
     +'<div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">'+totA+'</div><div class="sc-sub">Desenv. / Tem perfil no mes</div></div>'
     +'<div class="summary-card coral"><div class="sc-label">PRFB - ambos funis</div><div class="sc-val coral">'+totPRFB+'</div><div class="sc-sub">negociacoes ativas na etapa</div></div>'
     +'<div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">'+proj+'</div><div class="sc-sub">'+ritmo+'/dia &middot; '+wdT+' dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:'+pct+'%;background:var(--amber)"></div></div></div></div>'
     +'<div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">'+totP+'</div><div class="sc-sub">historico total</div></div>'
-    +'</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">'
-    +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
-    +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+totBuscaPagaC+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
     +'</div>'
     +'<div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">'
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">'+fmoney([...rp.vendas,...rrr.vendas].reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>'
@@ -941,7 +969,7 @@ function renderTotal(){
 
   // feed combinado
   const feedCombo=(rp.feed||[]).concat(rrr.feed||[]).sort(function(a,b){return b.ts.localeCompare(a.ts);});
-  h+=renderFeed(feedCombo,2);
+  h+=renderFeed(feedCombo,20);
   h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
   h+=renderContratosPorDia((rp.contratos_mes||[]).concat(rrr.contratos_mes||[]),'total');
 
@@ -1076,7 +1104,8 @@ class Handler(BaseHTTPRequestHandler):
                     "contratos_mes": [], "em_andamento": [], "perdas": [],
                     "feed": [], "vendas_busca_paga": 0, "contratos_busca_paga": 0,
                     "assinaturas_mes": [], "contrato_d1": [], "contrato_hoje": [],
-                    "prfb_ativos": 0}, 500)
+                    "prfb_ativos": 0,
+                    "vendas_hoje_total": 0, "contratos_hoje_total": 0, "assinaturas_hoje_total": 0}, 500)
         else:
             self.send_response(404)
             self.end_headers()
