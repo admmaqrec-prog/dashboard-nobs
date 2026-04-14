@@ -19,7 +19,7 @@ FUNIS = {
         "id":   "68a714f1b3f7b8001c750c18",
         "nome": "Funil Comercial RP",
         "etapas": [
-            {"id": "68a714f1b3f7b8001c750c1e", "nome": "Contrato enviado",     "cor": "#4f8fff"},
+            # "Contrato enviado" removida da exibicao por etapa (ainda usada como contrato_stage_id)
             {"id": "68c0589be520d500198b8beb", "nome": "Assinatura eletronica", "cor": "#f0a830"},
             {"id": "68dd780d1359390014d37c2b", "nome": "Fazendo estimativa",    "cor": "#a78bfa"},
             {"id": "68dd781197fb9700276860f7", "nome": "Preparando PDF",        "cor": "#2dd4bf"},
@@ -27,17 +27,22 @@ FUNIS = {
             {"id": "699f22a804f22c001ec7cb5d", "nome": "PRFB",                  "cor": "#fb923c"},
             {"id": "69aed6bcd8e658001e6773bb", "nome": "C4",                    "cor": "#4f8fff"},
         ],
-        "ok_stage_id":      "68d99bd829688b00193d8962",
-        "contrato_stage_id":"68a714f1b3f7b8001c750c1e",
-        # Etapas pre-contrato monitoradas para "Em andamento"
-        # Busca por nome (case-insensitive) pois IDs podem variar
+        "ok_stage_id":        "68d99bd829688b00193d8962",
+        "contrato_stage_id":  "68a714f1b3f7b8001c750c1e",
+        "assin_stage_id":     "68c0589be520d500198b8beb",
+        "prfb_stage_id":      "699f22a804f22c001ec7cb5d",
+        # Etapas pre-contrato: IDs fixos para busca direta (evita dependencia da API /deal_pipelines)
+        "pre_contrato_stages": [
+            # IDs serao descobertos via fetch_deals_by_stage_name mas com fallback por nome
+            # Se souber os IDs, colocar aqui: {"id": "...", "nome": "Desenvolvimento"}
+        ],
         "pre_contrato_nomes": ["desenvolvimento", "tem perfil"],
     },
     "rrr": {
         "id":   "693873d32abcdb001f8409c3",
         "nome": "Funil Comercial RRR Mae",
         "etapas": [
-            {"id": "693873d32abcdb001f8409c6", "nome": "Contrato enviado",     "cor": "#4f8fff"},
+            # "Contrato enviado" removida da exibicao por etapa (ainda usada como contrato_stage_id)
             {"id": "693874dfb6be4c0015bf64d3", "nome": "Assinatura eletronica","cor": "#f0a830"},
             {"id": "6938750379e7eb001d47db46", "nome": "Fazendo estimativa",   "cor": "#a78bfa"},
             {"id": "69387510ddb6b40022af1b53", "nome": "Preparando PDF",       "cor": "#2dd4bf"},
@@ -45,9 +50,11 @@ FUNIS = {
             {"id": "69a6e61733a3ff00206a5e8d", "nome": "PRFB",                 "cor": "#fb923c"},
             {"id": "69aedc182221780020823bab", "nome": "C4",                   "cor": "#4f8fff"},
         ],
-        "ok_stage_id":      "6938752561fe57001f7540f5",
-        "contrato_stage_id":"693873d32abcdb001f8409c6",
-        # Etapas pre-contrato monitoradas para "Em andamento"
+        "ok_stage_id":        "6938752561fe57001f7540f5",
+        "contrato_stage_id":  "693873d32abcdb001f8409c6",
+        "assin_stage_id":     "693874dfb6be4c0015bf64d3",
+        "prfb_stage_id":      "69a6e61733a3ff00206a5e8d",
+        "pre_contrato_stages": [],
         "pre_contrato_nomes": ["desenvolvimento", "tem perfil"],
     }
 }
@@ -231,14 +238,11 @@ def load_funil_data(key, month, year):
         tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_lost_stage, pid, e["id"])] = ("lost", e)
-        # Buscar TODOS os deals de TODAS as etapas pos-contrato (para contar contratos do mes)
-        # Isso inclui deals que ja avanaram alem de "Contrato enviado"
-        all_postcontrato_stage_ids = [e["id"] for e in funil["etapas"]]
+        # Buscar TODOS os deals das etapas pos-contrato (exibidas) + contrato_stage_id
+        all_postcontrato_stage_ids = [e["id"] for e in funil["etapas"]] + [funil["contrato_stage_id"]]
         for sid in all_postcontrato_stage_ids:
             tasks[ex.submit(fetch_all, pid, sid)] = ("postcontrato_all", sid)
-        # Buscar deals OK (vendidos) que passaram pelo contrato
-        tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
-        # Buscar etapas pre-contrato (Desenvolvimento, Tem perfil) pelo nome
+        # Buscar etapas pre-contrato (Desenvolvimento, Tem perfil) pelo nome via API
         for nome_lower in funil.get("pre_contrato_nomes", []):
             tasks[ex.submit(fetch_deals_by_stage_name, pid, nome_lower)] = ("pre_contrato", nome_lower)
 
@@ -268,10 +272,18 @@ def load_funil_data(key, month, year):
             pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
 
     # ── etapas ativas filtradas pelo mes (para exibicao por etapa) ────────────
+    # Assinatura eletronica: filtra por campo "Data da assinatura" no mes
+    # Demais etapas: filtra por updated_at no mes
+    assin_stage_id = funil.get("assin_stage_id", "")
     etapas_data = []
     for e in funil["etapas"]:
         all_active = etapas_map[e["id"]]["deals"]
-        mes_active = [d for d in all_active if in_month(d, month, year, "created_at")]
+        if e["id"] == assin_stage_id:
+            # Assinatura eletronica: negociacoes com Data da assinatura no mes
+            mes_active = [d for d in all_active
+                          if custom_date_in_month(d, "Data da assinatura", month, year)]
+        else:
+            mes_active = [d for d in all_active if in_month(d, month, year, "updated_at")]
         etapas_data.append({**e, "deals": mes_active})
 
     # ── vendas do mes (pelo closed_at) ────────────────────────────────────────
@@ -299,19 +311,24 @@ def load_funil_data(key, month, year):
             contratos_mes.append(d)
 
     # ── EM ANDAMENTO: negociacoes nas etapas Desenvolvimento / Tem perfil ────────
-    # Permanece nessas etapas E foi movido (updated_at) no mes selecionado.
-    # Nao filtra por "sem contrato" — inclui todas que estao nessas etapas no mes.
+    # Permanece nessas etapas E foi atualizado (updated_at) no mes selecionado.
+    # Usa pre_contrato_map (resultado do fetch_deals_by_stage_name por nome).
+    # Se algum funil retornar vazio, loga para debug.
     em_andamento = []
     seen_ea = set()
     for nome_lower, info in pre_contrato_map.items():
         deals = info.get("deals") or []
+        print(f"   [DEBUG EA] funil={key} etapa='{nome_lower}' total_deals={len(deals)}")
         for d in deals:
             if not in_month(d, month, year, "updated_at"):
+                continue
+            if d.get("win") is not None:  # perdido ou ganho — ignorar
                 continue
             did = d.get("_id") or d.get("id")
             if did and did not in seen_ea:
                 seen_ea.add(did)
-                em_andamento.append({**d, "_pre_stage": nome_lower})
+                stage_name = (d.get("deal_stage") or {}).get("name") or nome_lower
+                em_andamento.append({**d, "_pre_stage": stage_name})
 
     # ── assinaturas do mes ───────────────────────────────────────────────────
     # Deals com campo "Data da assinatura" dentro do mes selecionado
@@ -440,6 +457,19 @@ def load_funil_data(key, month, year):
     print(f"   [DEBUG CONTRATOS] mes={len(contratos_mes)} pool={len(all_deals_pool)}")
     print(f"   [DEBUG EM_ANDAMENTO] pre_contrato={len(em_andamento)} etapas={list(pre_contrato_map.keys())}")
 
+    # ── PRFB ativos (sem filtro de mes) ─────────────────────────────────────
+    prfb_stage_id = funil.get("prfb_stage_id", "")
+    prfb_ativos = []
+    if prfb_stage_id and prfb_stage_id in etapas_map:
+        prfb_ativos = [d for d in etapas_map[prfb_stage_id]["deals"]
+                       if d.get("win") is None]
+    elif prfb_stage_id:
+        # buscar direto se nao estiver no etapas_map (pq foi removido da lista de etapas ativas)
+        try:
+            prfb_ativos = fetch_stage_active(pid, prfb_stage_id)
+        except Exception:
+            prfb_ativos = []
+
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
         "vendas":               [slim(d) for d in vendas_mes],
@@ -452,6 +482,7 @@ def load_funil_data(key, month, year):
         "assinaturas_mes":      [slim(d) for d in assinaturas_mes],
         "contrato_d1":          contrato_d1,
         "contrato_hoje":        contrato_hoje,
+        "prfb_ativos":          len(prfb_ativos),
     }
 
 
@@ -491,10 +522,10 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .summary-grid-5{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:2rem}
 .summary-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;position:relative;overflow:hidden}
 .summary-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
-.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}.summary-card.teal::before{background:var(--teal)}
+.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}.summary-card.teal::before{background:var(--teal)}.summary-card.coral::before{background:var(--coral)}
 .sc-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem}
 .sc-val{font-size:38px;font-weight:700;line-height:1;margin-bottom:.3rem}
-.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}.sc-val.teal{color:var(--teal)}
+.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}.sc-val.teal{color:var(--teal)}.sc-val.coral{color:var(--coral)}
 .sc-sub{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .section-hd{display:flex;align-items:center;gap:10px;margin-bottom:1rem}
 .section-hd h3{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -751,16 +782,14 @@ function renderPane(key){
     <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
   </div>`;
 
-  h+=renderFeed(s.feed,15);
-
-  // responsaveis
+  // responsaveis — logo apos valor total estimativa
   const umap={};
   s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
   (s.em_andamento||[]).forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;});
   s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].vendas.push(d);umap[u].valor+=(d.amount_total||0);});
   if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
   s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
-  const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].ativo-a[1].ativo);
+  const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].contratos.length-a[1].contratos.length||b[1].vendas.length-a[1].vendas.length);
 
   h+=`<div class="section-hd"><h3>Por responsavel</h3><span class="cnt blue">${users.length} vendedores</span><div class="section-line"></div></div><div class="resp-grid">`;
   users.forEach(([name,data],i)=>{
@@ -768,16 +797,14 @@ function renderPane(key){
     h+=`<div class="resp-card">
       <div class="resp-header">
         <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
-        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
-        <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
+        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--blue)">${data.contratos.length}c</span></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.contratos.length} contratos · ${data.vendas.length} vendas no mes</div></div>
+        <div class="resp-total" style="color:${color}">${data.contratos.length}</div>
       </div><div class="resp-rows">`;
     s.etapas.forEach(e=>{const c=data.et[e.nome]||0;if(!c)return;h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:${e.cor}"></span>${e.nome}</span><span class="resp-row-val" style="color:${e.cor}">${c}</span></div>`;});
     h+=`<hr class="resp-divider">`;
-    // contratos com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="resp-row-val" style="color:var(--blue)">${data.contratos.length}</span></div>`;
     if(data.contratos.length){h+=`<div class="resp-deal-list">`;data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato_fmt||'--'}</span></div>`;});h+=`</div>`;}
-    // vendas com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
@@ -785,6 +812,8 @@ function renderPane(key){
     </div></div>`;
   });
   h+=`</div>`;
+
+  h+=renderFeed(s.feed,15);
 
   // em andamento — Desenvolvimento / Tem perfil
   const eaList=s.em_andamento||[];
@@ -839,6 +868,7 @@ function renderTotal(){
   const rpA=(rp.em_andamento||[]).length,rrrA=(rrr.em_andamento||[]).length,totA=rpA+rrrA;
   const totP=rp.perdas.length+rrr.perdas.length;
   const rpAssin=(rp.assinaturas_mes||[]).length,rrrAssin=(rrr.assinaturas_mes||[]).length,totAssin=rpAssin+rrrAssin;
+  const totPRFB=(rp.prfb_ativos||0)+(rrr.prfb_ativos||0);
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
 
@@ -848,6 +878,7 @@ function renderTotal(){
     <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
     <div class="summary-card teal"><div class="sc-label">Assinaturas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val teal">${totAssin}</div><div class="sc-sub">RP: ${rpAssin} / RRR: ${rrrAssin}</div></div>
+    <div class="summary-card coral"><div class="sc-label">PRFB — ambos funis</div><div class="sc-val coral">${totPRFB}</div><div class="sc-sub">negociacoes ativas na etapa</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
@@ -859,6 +890,53 @@ function renderTotal(){
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">${fmoney([...rp.vendas,...rrr.vendas].reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>
   </div>`;
+
+  // responsaveis totais — logo apos valor total
+  const umap={};
+  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
+  rp.vendas.forEach(d=>addU(uname(d),'vendas',d));
+  rrr.vendas.forEach(d=>addU(uname(d),'vendas',d));
+  if(rp.contratos_mes)rp.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
+  if(rrr.contratos_mes)rrr.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
+  rp.perdas.forEach(d=>addU(uname(d),'perda',d));
+  rrr.perdas.forEach(d=>addU(uname(d),'perda',d));
+  (rp.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
+  (rrr.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
+  const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].contratos.length-a[1].contratos.length||b[1].vendas.length-a[1].vendas.length);
+  h+=`<div class="section-hd"><h3>Por responsavel - Total (ambos funis)</h3><span class="cnt amber">${users.length} vendedores</span><div class="section-line"></div></div><div class="resp-grid">`;
+  users.forEach(([name,data],i)=>{
+    const color=COLORS[i%COLORS.length],init=name.split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
+    const uid=`tot-${i}`;
+    h+=`<div class="resp-card">
+      <div class="resp-header">
+        <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
+        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--blue)">${data.contratos.length}c</span></div>
+        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.contratos.length} contratos · ${data.vendas.length} vendas no mes</div></div>
+        <div class="resp-total" style="color:${color}">${data.contratos.length}</div>
+      </div><div class="resp-rows">`;
+    h+=`<div class="resp-row" style="cursor:${data.contratos.length?'pointer':'default'}" onclick="${data.contratos.length?`togInline('${uid}-c','${uid}-c-arrow')`:''}">
+      <span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span>
+      <span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--blue)">${data.contratos.length}</span>${data.contratos.length?`<span id="${uid}-c-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>`:''}</span>
+    </div>`;
+    if(data.contratos.length){
+      h+=`<div id="${uid}-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
+      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato_fmt||'--'}</span></div>`;});
+      h+=`</div></div>`;
+    }
+    h+=`<div class="resp-row" style="cursor:${data.vendas.length?'pointer':'default'}" onclick="${data.vendas.length?`togInline('${uid}-v','${uid}-v-arrow')`:''}">
+      <span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span>
+      <span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span>${data.vendas.length?`<span id="${uid}-v-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>`:''}</span>
+    </div>`;
+    if(data.vendas.length){
+      h+=`<div id="${uid}-v" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
+      data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});
+      h+=`</div></div>`;
+    }
+    h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
+    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
+    </div></div>`;
+  });
+  h+=`</div>`;
 
   // split RP x RRR
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
@@ -893,56 +971,6 @@ function renderTotal(){
     });
     h+=`</tbody></table></div></div>`;
   }
-
-  // responsaveis totais — PRIMEIRO, com listas colapsaveis
-  const umap={};
-  function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
-  rp.vendas.forEach(d=>addU(uname(d),'vendas',d));
-  rrr.vendas.forEach(d=>addU(uname(d),'vendas',d));
-  if(rp.contratos_mes)rp.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
-  if(rrr.contratos_mes)rrr.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
-  rp.perdas.forEach(d=>addU(uname(d),'perda',d));
-  rrr.perdas.forEach(d=>addU(uname(d),'perda',d));
-  (rp.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
-  (rrr.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
-  const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].vendas.length-a[1].vendas.length||b[1].contratos.length-a[1].contratos.length);
-
-  h+=`<div class="section-hd"><h3>Por responsavel - Total (ambos funis)</h3><span class="cnt amber">${users.length} vendedores</span><div class="section-line"></div></div><div class="resp-grid">`;
-  users.forEach(([name,data],i)=>{
-    const color=COLORS[i%COLORS.length],init=name.split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();
-    const uid=`tot-${i}`;
-    h+=`<div class="resp-card">
-      <div class="resp-header">
-        <div class="resp-avatar" style="background:${color}22;color:${color}">${init}</div>
-        <div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">${name}</div><span style="font-family:'DM Mono',monospace;font-size:13px;font-weight:700;color:var(--green)">${data.vendas.length}v</span></div>
-        <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace">${data.ativo} ativas · ${data.vendas.length} vendas no mes</div></div>
-        <div class="resp-total" style="color:${color}">${data.vendas.length}</div>
-      </div><div class="resp-rows">`;
-    // contratos — clicavel para abrir/fechar lista
-    h+=`<div class="resp-row" style="cursor:${data.contratos.length?'pointer':'default'}" onclick="${data.contratos.length?`togInline('${uid}-c','${uid}-c-arrow')`:''}">
-      <span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span>
-      <span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--blue)">${data.contratos.length}</span>${data.contratos.length?`<span id="${uid}-c-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>`:''}</span>
-    </div>`;
-    if(data.contratos.length){
-      h+=`<div id="${uid}-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
-      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato_fmt||'--'}</span></div>`;});
-      h+=`</div></div>`;
-    }
-    // vendas — clicavel para abrir/fechar lista
-    h+=`<div class="resp-row" style="cursor:${data.vendas.length?'pointer':'default'}" onclick="${data.vendas.length?`togInline('${uid}-v','${uid}-v-arrow')`:''}">
-      <span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span>
-      <span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span>${data.vendas.length?`<span id="${uid}-v-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>`:''}</span>
-    </div>`;
-    if(data.vendas.length){
-      h+=`<div id="${uid}-v" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
-      data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});
-      h+=`</div></div>`;
-    }
-    h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">${data.perdas}</span></div>
-    <div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">${fmoney(data.valor)}</span></div>
-    </div></div>`;
-  });
-  h+=`</div>`;
 
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
