@@ -2,13 +2,13 @@
 """
 Dashboard RD Station — Servidor web (Render)
 Rode com: python3 server.py
-Porta definida pela variavel de ambiente PORT (padrao 10000)
+Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
 import urllib.request
 import urllib.parse
 import datetime
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = "68c30c8a73e14f0019be70b1"
@@ -1197,9 +1197,9 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     import os
-    PORT = int(os.environ.get("PORT", 10000))
+    PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = HTTPServer((HOST, PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
