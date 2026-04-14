@@ -151,6 +151,38 @@ def is_busca_paga(deal):
     fonte  = get_fonte(deal).lower()
     return origem.startswith("busca paga") or fonte.startswith("busca paga")
 
+def get_custom_date(deal, label_substring):
+    """Retorna a data de um campo customizado pelo nome (case-insensitive).
+    Campos de data no RD Station costumam vir como 'YYYY-MM-DD' ou timestamp ISO.
+    Retorna string 'YYYY-MM-DD' ou '' se nao encontrado/vazio."""
+    for cf in (deal.get("deal_custom_fields") or []):
+        lbl = (cf.get("custom_field") or {}).get("label", "")
+        if label_substring.lower() in lbl.lower():
+            val = (cf.get("value") or "").strip()
+            if not val:
+                return ""
+            # Pode vir como timestamp ISO completo ou apenas YYYY-MM-DD
+            return val[:10]
+    return ""
+
+def custom_date_in_month(deal, label_substring, month, year):
+    """Verifica se o campo customizado de data esta no mes/ano dados."""
+    val = get_custom_date(deal, label_substring)
+    if not val:
+        return False
+    try:
+        dt = datetime.date.fromisoformat(val)
+        return dt.month == month and dt.year == year
+    except Exception:
+        return False
+
+def custom_date_equals(deal, label_substring, date_str):
+    """Verifica se o campo customizado de data e igual a date_str ('YYYY-MM-DD')."""
+    val = get_custom_date(deal, label_substring)
+    if not val:
+        return False
+    return val == date_str
+
 # ── main loader ───────────────────────────────────────────────────────────────
 def get_contrato_entry_date(d):
     """Retorna a data (YYYY-MM-DD) em que o deal entrou na etapa Contrato enviado.
@@ -232,12 +264,9 @@ def load_funil_data(key, month, year):
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
     # ── CONTRATOS DO MES ──────────────────────────────────────────────────────
-    # Conta como "contrato do mes" qualquer deal que:
-    #   - Esteja em qualquer etapa pos-contrato (Contrato enviado, Assinatura,
-    #     Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4) OU vendido (OK)
-    #   - E cujo updated_at caia no mes selecionado
-    #     (proxy para "quando foi movido para/apos contrato enviado")
-    # Para deals vendidos usa closed_at se disponivel, senao updated_at.
+    # Usa o campo customizado "Data do contrato" para identificar contratos do mes.
+    # Qualquer deal em qualquer etapa pos-contrato OU vendido (OK) que tenha
+    # "Data do contrato" preenchida com data dentro do mes selecionado.
     seen_contrato = set()
     contratos_mes = []
 
@@ -247,12 +276,7 @@ def load_funil_data(key, month, year):
     all_postcontrato_deals.extend(ok_deals)
 
     for d in all_postcontrato_deals:
-        # Para vendidos, priorizar closed_at; para demais, updated_at
-        if d.get("win") is True:
-            ref_field = "closed_at" if d.get("closed_at") else "updated_at"
-        else:
-            ref_field = "updated_at"
-        if not in_month(d, month, year, ref_field):
+        if not custom_date_in_month(d, "Data do contrato", month, year):
             continue
         did = d.get("_id") or d.get("id")
         if did and did not in seen_contrato:
@@ -331,14 +355,15 @@ def load_funil_data(key, month, year):
             "fonte":            get_fonte(d),
             "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
             "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
-            "contrato_entry_date": get_contrato_entry_date(d),
+            "data_contrato":    get_custom_date(d, "Data do contrato"),
+            "data_assinatura":  get_custom_date(d, "Data da assinatura"),
         }
         return out
 
-    # ── D+1 e Hoje (alteracao #2) ─────────────────────────────────────────────
-    # D+1 = negociacoes movidas para "Contrato enviado" no dia util ANTERIOR (ontem)
-    # independente de onde o deal esteja agora no funil.
-    # Usa contratos_mes (todos que fizeram contrato no mes) e filtra por data de entrada.
+    # ── D+1 ───────────────────────────────────────────────────────────────────
+    # D+1 = deals com "Data do contrato" == dia util anterior E "Data da assinatura" vazia.
+    # Se a assinatura ja foi preenchida, sai da lista (negociacao encerrada).
+    # Busca em todos os deals pos-contrato (independente de mes).
     today = datetime.date.today()
     weekday = today.weekday()  # 0=segunda
     if weekday == 0:
@@ -353,20 +378,33 @@ def load_funil_data(key, month, year):
 
     def slim_d1(d):
         return {
-            "name":             d.get("name") or "",
-            "user":             user_name(d),
-            "stage_date":       get_contrato_entry_date(d),
-            "updated_at":       d.get("updated_at") or "",
-            "current_stage":    (d.get("deal_stage") or {}).get("name") or "",
+            "name":            d.get("name") or "",
+            "user":            user_name(d),
+            "data_contrato":   get_custom_date(d, "Data do contrato"),
+            "data_assinatura": get_custom_date(d, "Data da assinatura"),
+            "current_stage":   (d.get("deal_stage") or {}).get("name") or "",
+            "updated_at":      d.get("updated_at") or "",
         }
 
-    # D+1: movidos para contrato ontem (dia util anterior) — todos os deals do mes
-    contrato_d1   = [slim_d1(d) for d in contratos_mes
-                     if get_contrato_entry_date(d) == prev_wd_str]
-    contrato_hoje = [slim_d1(d) for d in contratos_mes
-                     if get_contrato_entry_date(d) == today_str]
+    # Pool completo para D+1 (todos os deals pos-contrato + ok, sem filtro de mes)
+    all_deals_pool = list({
+        (d.get("_id") or d.get("id")): d
+        for d in all_postcontrato_deals  # ja inclui ok_deals
+    }.values())
 
-    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)} total_contratos_mes={len(contratos_mes)}")
+    contrato_d1 = [
+        slim_d1(d) for d in all_deals_pool
+        if custom_date_equals(d, "Data do contrato", prev_wd_str)
+        and not get_custom_date(d, "Data da assinatura")
+    ]
+    contrato_hoje = [
+        slim_d1(d) for d in all_deals_pool
+        if custom_date_equals(d, "Data do contrato", today_str)
+        and not get_custom_date(d, "Data da assinatura")
+    ]
+
+    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)}")
+    print(f"   [DEBUG CONTRATOS] mes={len(contratos_mes)} pool={len(all_deals_pool)}")
     print(f"   [DEBUG EM_ANDAMENTO] pre_contrato={len(em_andamento)} etapas={list(pre_contrato_map.keys())}")
 
     return {
@@ -703,7 +741,7 @@ function renderPane(key){
     h+=`<hr class="resp-divider">`;
     // contratos com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="resp-row-val" style="color:var(--blue)">${data.contratos.length}</span></div>`;
-    if(data.contratos.length){h+=`<div class="resp-deal-list">`;data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.updated_at)}</span></div>`;});h+=`</div>`;}
+    if(data.contratos.length){h+=`<div class="resp-deal-list">`;data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato||fdate(d.updated_at)}</span></div>`;});h+=`</div>`;}
     // vendas com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
@@ -739,7 +777,7 @@ function renderPane(key){
   // contratos do mes
   h+=`<div class="section-hd" style="margin-top:2rem"><h3>Contratos enviados - ${MN[selM]}/${selY}</h3><span class="cnt blue">${totC} total</span><div class="section-line"></div></div>`;
   if(!totC){h+=`<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhum contrato neste periodo</div>`;}
-  else{h+=`<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>`;s.contratos_mes.forEach(d=>{h+=`<tr><td class="dn" style="color:var(--blue)">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${fdate(d.updated_at)}</td></tr>`;});h+=`</tbody></table></div>`;}
+  else{h+=`<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>`;s.contratos_mes.forEach(d=>{h+=`<tr><td class="dn" style="color:var(--blue)">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d.data_contrato||fdate(d.updated_at)}</td></tr>`;});h+=`</tbody></table></div>`;}
 
   // vendas do mes
   h+=`<div class="section-hd"><h3>Vendas fechadas - ${MN[selM]}/${selY}</h3><span class="cnt green">${totV} total</span><div class="section-line"></div></div>`;
@@ -848,7 +886,7 @@ function renderTotal(){
     </div>`;
     if(data.contratos.length){
       h+=`<div id="${uid}-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
-      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.updated_at)}</span></div>`;});
+      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato||fdate(d.updated_at)}</span></div>`;});
       h+=`</div></div>`;
     }
     // vendas — clicavel para abrir/fechar lista
@@ -918,17 +956,17 @@ function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
   let h=`<div class="d1-wrap">
     <div class="d1-hd">
       <span class="d1-title">&#9200; Contrato enviado — Acompanhamento diario</span>
-      <span class="d1-badge amber">D+1: ${d1.length} aguardando</span>
+      <span class="d1-badge amber">D+1: ${d1.length} sem assinatura</span>
       <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
     </div><div class="d1-section">`;
 
-  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, movidos ontem para contrato</div>`;
-  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato no dia util anterior</div>`;}
-  else{d1.forEach(d=>{const stg=d.current_stage&&d.current_stage!=='Contrato enviado'?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">${d1Lbl.toLowerCase()}</span></div>`;});}
+  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — contrato em ${d1Lbl}, aguardando assinatura</div>`;
+  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato sem assinatura no dia util anterior</div>`;}
+  else{d1.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato||'--'}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">aguard. assin.</span></div>`;});}
 
-  h+=`<div class="d1-section-lbl">Movidos para contrato enviado hoje</div>`;
-  if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
-  else{dHoje.forEach(d=>{const stg=d.current_stage&&d.current_stage!=='Contrato enviado'?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
+  h+=`<div class="d1-section-lbl">Contrato hoje — aguardando assinatura</div>`;
+  if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato hoje sem assinatura</div>`;}
+  else{dHoje.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato||'--'}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
 
   h+=`</div></div>`;
   return h;
@@ -939,7 +977,7 @@ function renderContratosPorDia(contratos,paneKey){
   // agrupa por dia do updated_at, somente do mes selecionado
   const byDay={};
   (contratos||[]).forEach(d=>{
-    const dt=(d.updated_at||'').slice(0,10);
+    const dt=(d.data_contrato||(d.updated_at||'')).slice(0,10);
     if(!dt)return;
     const [y,m]=dt.split('-').map(Number);
     if(m!==selM||y!==selY)return;
