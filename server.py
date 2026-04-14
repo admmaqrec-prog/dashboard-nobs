@@ -495,9 +495,9 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .total-hero{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:14px;justify-items:stretch}
 .total-secondary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:2rem;justify-items:stretch}
 .summary-card.hero{padding:1.75rem 1.5rem}
-.summary-card.hero .sc-label{font-size:13px;margin-bottom:.75rem}
-.summary-card.hero .sc-val{font-size:52px}
-.summary-card.hero .sc-sub{font-size:13px}
+.summary-card.hero .sc-label{font-size:16px;margin-bottom:.75rem}
+.summary-card.hero .sc-val{font-size:72px}
+.summary-card.hero .sc-sub{font-size:15px}
 .summary-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;position:relative;overflow:hidden}
 .summary-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
 .summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}.summary-card.teal::before{background:var(--teal)}.summary-card.coral::before{background:var(--coral)}
