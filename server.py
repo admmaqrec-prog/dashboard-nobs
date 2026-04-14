@@ -246,6 +246,13 @@ def load_funil_data(key, month, year):
         }
         return out
 
+    # D+1: todos os deals ativos agora na etapa "Contrato enviado" (sem filtro de mes)
+    cid = funil["contrato_stage_id"]
+    contrato_ativos_slim = [
+        {"name": d.get("name") or "", "user": user_name(d), "updated_at": d.get("updated_at") or ""}
+        for d in etapas_map[cid]["deals"] if d.get("win") is None
+    ]
+
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
         "vendas":               [slim(d) for d in vendas_mes],
@@ -254,6 +261,7 @@ def load_funil_data(key, month, year):
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
         "contratos_busca_paga": len(contratos_busca_paga),
+        "contrato_ativos":      contrato_ativos_slim,
     }
 
 
@@ -374,6 +382,21 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
 .total-row{display:flex;justify-content:space-between;align-items:center;padding:.4rem 0}
 .total-row-label{color:var(--dim);display:flex;align-items:center;gap:8px;font-size:12px}
 .total-row-val{font-family:'DM Mono',monospace;font-size:16px;font-weight:600}
+.d1-wrap{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:2rem}
+.d1-hd{padding:.85rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.d1-title{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);flex:1}
+.d1-badge{font-size:11px;font-family:'DM Mono',monospace;padding:3px 10px;border-radius:4px;border:1px solid;font-weight:600}
+.d1-badge.amber{color:var(--amber);border-color:rgba(240,168,48,.4);background:var(--amber-dim)}
+.d1-badge.blue{color:var(--blue);border-color:rgba(79,143,255,.4);background:var(--blue-dim)}
+.d1-section{padding:.5rem 1.25rem .75rem}
+.d1-section-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem;font-family:'DM Mono',monospace;padding-top:.5rem;border-top:1px solid var(--border)}
+.d1-section-lbl:first-child{border-top:none;padding-top:0}
+.d1-item{display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--border)}
+.d1-item:last-child{border-bottom:none}
+.d1-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px}
+.d1-user{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace}
+.d1-tag{font-size:10px;font-family:'DM Mono',monospace;white-space:nowrap;padding:2px 8px;border-radius:4px}
+.d1-empty{font-size:12px;color:var(--muted);font-family:'DM Mono',monospace;padding:.4rem 0}
 </style>
 </head>
 <body>
@@ -529,15 +552,16 @@ function renderPane(key){
     <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
+  ${key==='rp'?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${s.vendas_busca_paga||0}</div><div class="sc-sub">origem "busca" no mes</div></div>
     <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${s.contratos_busca_paga||0}</div><div class="sc-sub">contratos enviados via busca</div></div>
-  </div>
+  </div>`:''}
   <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">${fmoney(s.vendas.reduce((a,d)=>a+(d.amount_total||0),0))}</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>
   </div>`;
 
   h+=renderFeed(s.feed,15);
+  h+=renderD1(key==='rp'?s.contrato_ativos:[],key==='rrr'?s.contrato_ativos:[],key);
 
   // responsaveis
   const umap={};
@@ -590,6 +614,8 @@ function renderPane(key){
   h+=`<div class="section-hd"><h3>Vendas fechadas - ${MN[selM]}/${selY}</h3><span class="cnt green">${totV} total</span><div class="section-line"></div></div>`;
   if(!totV){h+=`<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma venda neste periodo</div>`;}
   else{h+=`<div class="tw" style="border-color:rgba(62,207,142,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Fechado em</th></tr></thead><tbody>`;s.vendas.forEach(d=>{h+=`<tr><td class="dn" style="color:var(--green)">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${fdate(d.closed_at)}</td></tr>`;});h+=`</tbody></table></div>`;}
+
+  h+=renderContratosPorDia(s.contratos_mes,key);
 
   // perdas
   h+=`<div class="section-hd" style="margin-top:2rem"><h3>Perdas nas etapas finais</h3><span class="cnt red">${totP} total</span><div class="section-line"></div></div>`;
@@ -698,6 +724,8 @@ function renderTotal(){
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
   h+=renderFeed(feedCombo,2);
+  h+=renderD1(rp.contrato_ativos,rrr.contrato_ativos,'total');
+  h+=renderContratosPorDia([...(rp.contratos_mes||[]),...(rrr.contratos_mes||[])],'total');
 
   // perdas combinadas com motivos
   const todasPerdas=[...rp.perdas,...rrr.perdas];
@@ -714,6 +742,83 @@ function renderTotal(){
     h+=`</tbody></table></div></div>`;
   }
 
+  return h;
+}
+
+function prevWorkday(date){
+  const d=new Date(date);
+  do{d.setDate(d.getDate()-1);}while(d.getDay()===0||d.getDay()===6);
+  return d;
+}
+function isoDate(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+
+function renderD1(rpAtivos,rrrAtivos,paneKey){
+  const now=new Date();
+  const todayStr=isoDate(now);
+  const prevWd=prevWorkday(now);
+  const prevWdStr=isoDate(prevWd);
+  const isMonday=now.getDay()===1;
+  const d1Lbl=isMonday?'Sexta-feira':'Ontem';
+
+  // combinar funis relevantes com tag
+  let all=[];
+  if(paneKey==='rp')   all=[...(rpAtivos||[]).map(d=>({...d,_f:'RP'}))];
+  else if(paneKey==='rrr') all=[...(rrrAtivos||[]).map(d=>({...d,_f:'RRR'}))];
+  else all=[...(rpAtivos||[]).map(d=>({...d,_f:'RP'})),...(rrrAtivos||[]).map(d=>({...d,_f:'RRR'}))];
+
+  const d1=all.filter(d=>(d.updated_at||'').startsWith(prevWdStr));
+  const dHoje=all.filter(d=>(d.updated_at||'').startsWith(todayStr));
+
+  let h=`<div class="d1-wrap">
+    <div class="d1-hd">
+      <span class="d1-title">&#9200; Contrato enviado — Acompanhamento diario</span>
+      <span class="d1-badge amber">D+1: ${d1.length} aguardando</span>
+      <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
+    </div><div class="d1-section">`;
+
+  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, aguardando assinatura</div>`;
+  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando</div>`;}
+  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">${d1Lbl.toLowerCase()}</span></div>`;});}
+
+  h+=`<div class="d1-section-lbl">Movidos para contrato enviado hoje</div>`;
+  if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
+  else{dHoje.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
+
+  h+=`</div></div>`;
+  return h;
+}
+
+function renderContratosPorDia(contratos,paneKey){
+  // usa contratos_mes (already filtered to selM/selY by backend)
+  // agrupa por dia do updated_at, somente do mes selecionado
+  const byDay={};
+  (contratos||[]).forEach(d=>{
+    const dt=(d.updated_at||'').slice(0,10);
+    if(!dt)return;
+    const [y,m]=dt.split('-').map(Number);
+    if(m!==selM||y!==selY)return;
+    byDay[dt]=(byDay[dt]||0)+1;
+  });
+  const daysInMonth=new Date(selY,selM,0).getDate();
+  const todayStr=isoDate(new Date());
+  const total=Object.values(byDay).reduce((a,b)=>a+b,0);
+  const idSuffix=paneKey;
+  let h=`<div class="stage-row" id="cpd-${idSuffix}" style="margin-bottom:2rem">
+    <div class="stage-header" onclick="tog('cpd-${idSuffix}')">
+      <div class="stage-color" style="background:var(--blue)"></div>
+      <span class="stage-name">Contratos enviados por dia — ${MN[selM]}/${selY}</span>
+      <span class="stage-count" style="color:var(--blue)">${total}</span>
+      <span class="stage-arrow">&#9654;</span>
+    </div>
+    <div class="stage-deals"><table class="dt"><thead><tr><th>Dia</th><th>Contratos</th></tr></thead><tbody>`;
+  for(let d=1;d<=daysInMonth;d++){
+    const key=`${selY}-${String(selM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const qty=byDay[key]||0;
+    const isToday=key===todayStr;
+    const lbl=`${String(d).padStart(2,'0')}/${String(selM).padStart(2,'0')}${isToday?' (hoje)':''}`;
+    h+=`<tr><td class="dd" style="${isToday?'color:var(--green);font-weight:700':''}">${lbl}</td><td style="font-family:'DM Mono',monospace;font-size:13px;padding:.6rem 1.25rem;${qty>0?'color:var(--blue);font-weight:700':'color:var(--muted)'}">${qty}</td></tr>`;
+  }
+  h+=`</tbody></table></div></div>`;
   return h;
 }
 
