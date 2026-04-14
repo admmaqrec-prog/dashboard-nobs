@@ -60,12 +60,20 @@ FUNIS = {
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-def rd_get(path):
+def rd_get(path, retries=2):
     sep = "&" if "?" in path else "?"
     url = f"{BASE}{path}{sep}token={TOKEN}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=25) as r:
+                return json.loads(r.read().decode())
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                import time; time.sleep(1)
+    raise last_err
 
 def fetch_all(pipeline_id, stage_id, extra=""):
     deals, page = [], 1
@@ -87,15 +95,40 @@ def fetch_pipeline_stages(pipeline_id):
         return []
 
 def fetch_deals_by_stage_name(pipeline_id, stage_name_lower):
-    """Busca deals de uma etapa pelo nome (case-insensitive). Retorna (stage_id, deals)."""
+    """Busca deals de uma etapa pelo nome via /deal_pipelines para descobrir o stage_id,
+    depois busca os deals. Retorna (stage_id, deals).
+    Fallback: busca todos os deals ativos do pipeline e filtra pelo nome da etapa."""
+    # Primeiro: tentar via lista de stages do pipeline
     stages = fetch_pipeline_stages(pipeline_id)
     for s in stages:
         if stage_name_lower in (s.get("name") or "").lower():
             sid = s.get("_id") or s.get("id")
             if sid:
-                deals = fetch_all(pipeline_id, sid)
-                return sid, deals
-    return None, []
+                try:
+                    deals = fetch_all(pipeline_id, sid)
+                    print(f"   [EA] pipeline={pipeline_id} etapa='{stage_name_lower}' sid={sid} deals={len(deals)}")
+                    return sid, deals
+                except Exception as e:
+                    print(f"   [EA WARN] fetch_all falhou para sid={sid}: {e}")
+    # Fallback: buscar pelo campo deal_stage.name nos deals ativos (sem filtro de stage)
+    print(f"   [EA FALLBACK] buscando '{stage_name_lower}' por deal_stage.name no pipeline {pipeline_id}")
+    try:
+        all_deals, page = [], 1
+        while True:
+            d = rd_get(f"/deals?deal_pipeline_id={pipeline_id}&limit=200&page={page}")
+            batch = d.get("deals") or []
+            matched = [x for x in batch
+                       if stage_name_lower in ((x.get("deal_stage") or {}).get("name") or "").lower()
+                       and x.get("win") is None]
+            all_deals.extend(matched)
+            if len(batch) < 200:
+                break
+            page += 1
+        print(f"   [EA FALLBACK] encontrados {len(all_deals)} deals para '{stage_name_lower}'")
+        return None, all_deals
+    except Exception as e:
+        print(f"   [EA FALLBACK ERRO] {e}")
+        return None, []
 
 def fetch_stage_active(pipeline_id, stage_id):
     return [x for x in fetch_all(pipeline_id, stage_id) if x.get("win") is None]
@@ -252,9 +285,13 @@ def load_funil_data(key, month, year):
     postcontrato_pool = {}   # stage_id -> list of all deals (win=any)
     pre_contrato_map  = {}   # nome_lower -> list of deals
 
-    for fut in as_completed(tasks):
+    for fut in as_completed(tasks, timeout=120):
         kind, meta = tasks[fut]
-        result = fut.result()
+        try:
+            result = fut.result()
+        except Exception as e:
+            print(f"   [WARN] task {kind}/{meta} falhou: {e}")
+            result = [] if kind != "pre_contrato" else (None, [])
         if kind == "active":
             etapas_map[meta["id"]]["deals"] = result
         elif kind == "ok":
@@ -692,10 +729,19 @@ async function loadAll(){
   document.getElementById('loading').style.display='flex';
   setLoad(10,'Buscando dados...');
   try{
-    const [rp,rrr]=await Promise.all([
-      fetch(`/api/data?funil=rp&month=${selM}&year=${selY}`).then(r=>{if(!r.ok)throw new Error(r.statusText);return r.json();}),
-      fetch(`/api/data?funil=rrr&month=${selM}&year=${selY}`).then(r=>{if(!r.ok)throw new Error(r.statusText);return r.json();})
-    ]);
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),90000); // 90s timeout
+    setLoad(20,'Buscando Funil RP...');
+    const rpRes=await fetch(`/api/data?funil=rp&month=${selM}&year=${selY}`,{signal:ctrl.signal});
+    if(!rpRes.ok)throw new Error('RP: '+rpRes.statusText);
+    const rp=await rpRes.json();
+    setLoad(55,'Buscando Funil RRR Mae...');
+    const rrrRes=await fetch(`/api/data?funil=rrr&month=${selM}&year=${selY}`,{signal:ctrl.signal});
+    if(!rrrRes.ok)throw new Error('RRR: '+rrrRes.statusText);
+    const rrr=await rrrRes.json();
+    clearTimeout(tid);
+    if(rp.error)console.warn('RP error:',rp.error);
+    if(rrr.error)console.warn('RRR error:',rrr.error);
     setLoad(90,'Renderizando...');STATE.rp=rp;STATE.rrr=rrr;
     await new Promise(r=>setTimeout(r,250));setLoad(100,'Pronto!');await new Promise(r=>setTimeout(r,250));
     document.getElementById('loading').style.display='none';
@@ -1139,7 +1185,11 @@ class Handler(BaseHTTPRequestHandler):
                     print("   [DEBUG] exemplo hoje:", data["contrato_hoje"][0])
             except Exception as e:
                 import traceback; traceback.print_exc()
-                self.send_json({"error": str(e)}, 500)
+                self.send_json({"error": str(e), "etapas": [], "vendas": [],
+                    "contratos_mes": [], "em_andamento": [], "perdas": [],
+                    "feed": [], "vendas_busca_paga": 0, "contratos_busca_paga": 0,
+                    "assinaturas_mes": [], "contrato_d1": [], "contrato_hoje": [],
+                    "prfb_ativos": 0}, 500)
         else:
             self.send_response(404)
             self.end_headers()
