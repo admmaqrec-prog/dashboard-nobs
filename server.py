@@ -730,17 +730,15 @@ async function loadAll(){
   setLoad(10,'Buscando dados...');
   try{
     const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),180000); // 180s timeout (cold start Render)
-    setLoad(20,'Buscando funis em paralelo...');
-    // Busca RP e RRR em paralelo para reduzir tempo total
-    const [rpRes,rrrRes]=await Promise.all([
-      fetch(`/api/data?funil=rp&month=${selM}&year=${selY}`,{signal:ctrl.signal}),
-      fetch(`/api/data?funil=rrr&month=${selM}&year=${selY}`,{signal:ctrl.signal})
-    ]);
+    const tid=setTimeout(()=>ctrl.abort(),90000); // 90s timeout
+    setLoad(20,'Buscando Funil RP...');
+    const rpRes=await fetch(`/api/data?funil=rp&month=${selM}&year=${selY}`,{signal:ctrl.signal});
     if(!rpRes.ok)throw new Error('RP: '+rpRes.statusText);
+    const rp=await rpRes.json();
+    setLoad(55,'Buscando Funil RRR Mae...');
+    const rrrRes=await fetch(`/api/data?funil=rrr&month=${selM}&year=${selY}`,{signal:ctrl.signal});
     if(!rrrRes.ok)throw new Error('RRR: '+rrrRes.statusText);
-    setLoad(70,'Processando dados...');
-    const [rp,rrr]=await Promise.all([rpRes.json(),rrrRes.json()]);
+    const rrr=await rrrRes.json();
     clearTimeout(tid);
     if(rp.error)console.warn('RP error:',rp.error);
     if(rrr.error)console.warn('RRR error:',rrr.error);
@@ -753,11 +751,7 @@ async function loadAll(){
     startCountdown();
   }catch(e){
     document.getElementById('loading').style.display='none';
-    const isTimeout=e.name==='AbortError'||e.message.includes('abort');
-    const msg=isTimeout
-      ? '⏱ Servidor acordando (cold start). Aguarde 30s e clique em Atualizar.'
-      : 'Erro: '+e.message;
-    document.getElementById('pane-'+curF).innerHTML='<div style="background:var(--red-dim);border:1px solid rgba(240,96,96,.3);border-radius:10px;padding:1.5rem;color:var(--red);font-size:13px;text-align:center">'+msg+'<br><br><button onclick="loadAll()" style="margin-top:4px;padding:8px 20px;background:var(--red-dim);border:1px solid rgba(240,96,96,.5);border-radius:6px;color:var(--red);cursor:pointer;font-size:12px">&#8635; Tentar novamente</button></div>';
+    document.getElementById('pane-'+curF).innerHTML=`<div style="background:var(--red-dim);border:1px solid rgba(240,96,96,.3);border-radius:10px;padding:1.25rem;color:var(--red);font-size:13px"><strong>Erro:</strong> ${e.message}</div>`;
     document.getElementById('sdot').style.cssText='width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red)';
   }
   document.getElementById('rbtn').querySelector('#rspin').className='';
