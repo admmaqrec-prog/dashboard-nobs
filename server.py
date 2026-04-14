@@ -2,7 +2,7 @@
 """
 Dashboard RD Station — Servidor web (Render)
 Rode com: python3 server.py
-Porta definida pela variavel de ambiente PORT (padrao 8765)
+Porta definida pela variavel de ambiente PORT (padrao 10000)
 """
 import json
 import urllib.request
@@ -1197,7 +1197,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     import os
-    PORT = int(os.environ.get("PORT", 8765))
+    PORT = int(os.environ.get("PORT", 10000))
     HOST = "0.0.0.0"
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print("=" * 50)
