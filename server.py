@@ -61,7 +61,7 @@ def rd_get(path, retries=2):
     last_err = None
     for attempt in range(retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=25) as r:
+            with urllib.request.urlopen(req, timeout=40) as r:
                 return json.loads(r.read().decode())
         except Exception as e:
             last_err = e
@@ -235,7 +235,7 @@ def load_funil_data(key, month, year):
     postcontrato_pool = {}
     pre_contrato_map  = {}
 
-    for fut in as_completed(tasks, timeout=120):
+    for fut in as_completed(tasks, timeout=160):
         kind, meta = tasks[fut]
         try:
             result = fut.result()
@@ -649,16 +649,17 @@ async function loadAll(){
   setLoad(10,'Buscando dados...');
   try{
     const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),90000);
-    setLoad(20,'Buscando Funil RP...');
-    const rpRes=await fetch('/api/data?funil=rp&month='+selM+'&year='+selY,{signal:ctrl.signal});
-    if(!rpRes.ok)throw new Error('RP: '+rpRes.statusText);
-    const rp=await rpRes.json();
-    setLoad(55,'Buscando Funil RRR Mae...');
-    const rrrRes=await fetch('/api/data?funil=rrr&month='+selM+'&year='+selY,{signal:ctrl.signal});
-    if(!rrrRes.ok)throw new Error('RRR: '+rrrRes.statusText);
-    const rrr=await rrrRes.json();
+    const tid=setTimeout(function(){ctrl.abort();},180000);
+    setLoad(20,'Buscando ambos os funis em paralelo...');
+    var prog=20;
+    var progInt=setInterval(function(){if(prog<80){prog+=2;setLoad(prog,'Aguardando API do RD Station...');}},2000);
+    const results=await Promise.all([
+      fetch('/api/data?funil=rp&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RP: '+r.statusText);return r.json();}),
+      fetch('/api/data?funil=rrr&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RRR: '+r.statusText);return r.json();})
+    ]);
+    clearInterval(progInt);
     clearTimeout(tid);
+    const rp=results[0],rrr=results[1];
     if(rp.error)console.warn('RP error:',rp.error);
     if(rrr.error)console.warn('RRR error:',rrr.error);
     setLoad(90,'Renderizando...');STATE.rp=rp;STATE.rrr=rrr;
