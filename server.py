@@ -520,13 +520,19 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .tab-btn.active{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
 .tab-btn.total-tab.active{background:rgba(240,168,48,.15);color:var(--amber);border-color:rgba(240,168,48,.4)}
 .summary-grid-5{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:2rem}
+.total-hero{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:14px;justify-items:stretch}
+.total-secondary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:2rem;justify-items:stretch}
+.summary-card.hero{padding:1.75rem 1.5rem}
+.summary-card.hero .sc-label{font-size:13px;margin-bottom:.75rem}
+.summary-card.hero .sc-val{font-size:52px}
+.summary-card.hero .sc-sub{font-size:13px}
 .summary-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;position:relative;overflow:hidden}
 .summary-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
 .summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}.summary-card.teal::before{background:var(--teal)}.summary-card.coral::before{background:var(--coral)}
-.sc-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem}
+.sc-label{font-size:12px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem;font-weight:600}
 .sc-val{font-size:38px;font-weight:700;line-height:1;margin-bottom:.3rem}
 .sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}.sc-val.teal{color:var(--teal)}.sc-val.coral{color:var(--coral)}
-.sc-sub{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
+.sc-sub{font-size:12px;color:var(--dim);font-family:'DM Mono',monospace}
 .section-hd{display:flex;align-items:center;gap:10px;margin-bottom:1rem}
 .section-hd h3{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .cnt{font-size:11px;font-family:'DM Mono',monospace;padding:2px 8px;border-radius:4px;border:1px solid}
@@ -874,15 +880,18 @@ function renderTotal(){
 
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
-  let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
-    <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
-    <div class="summary-card teal"><div class="sc-label">Assinaturas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val teal">${totAssin}</div><div class="sc-sub">RP: ${rpAssin} / RRR: ${rrrAssin}</div></div>
-    <div class="summary-card coral"><div class="sc-label">PRFB — ambos funis</div><div class="sc-val coral">${totPRFB}</div><div class="sc-sub">negociacoes ativas na etapa</div></div>
-    <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
-    <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
-    <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
+  let h=`
+  <div class="total-hero">
+    <div class="summary-card blue hero"><div class="sc-label">Contratos enviados — ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} &nbsp;·&nbsp; RRR: ${rrrC}</div></div>
+    <div class="summary-card teal hero"><div class="sc-label">Assinaturas — ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val teal">${totAssin}</div><div class="sc-sub">RP: ${rpAssin} &nbsp;·&nbsp; RRR: ${rrrAssin}</div></div>
+    <div class="summary-card green hero"><div class="sc-label">Vendas — ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} &nbsp;·&nbsp; RRR: ${rrrV}</div></div>
   </div>
+  <div class="total-secondary">
+    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totA}</div><div class="sc-sub">Desenv. / Tem perfil no mes</div></div>
+    <div class="summary-card coral"><div class="sc-label">PRFB — ambos funis</div><div class="sc-val coral">${totPRFB}</div><div class="sc-sub">negociacoes ativas na etapa</div></div>
+    <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia · ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
+    <div class="summary-card red"><div class="sc-label">Perdas — ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
+  </div>`
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">
     <div class="summary-card purple"><div class="sc-label">Vendas por mídia social</div><div class="sc-val purple">${totBuscaPagaV}</div><div class="sc-sub">ambos funis · origem "busca"</div></div>
     <div class="summary-card purple"><div class="sc-label">Contratos por mídia social</div><div class="sc-val purple">${totBuscaPagaC}</div><div class="sc-sub">contratos enviados via busca</div></div>
