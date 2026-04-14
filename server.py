@@ -246,12 +246,40 @@ def load_funil_data(key, month, year):
         }
         return out
 
-    # D+1: todos os deals ativos agora na etapa "Contrato enviado" (sem filtro de mes)
+    # D+1 e Hoje: buscar deals ativos na etapa contrato enviado filtrados por data
+    # usando updated_after/updated_before para pegar apenas os movidos naquele dia
     cid = funil["contrato_stage_id"]
-    contrato_ativos_slim = [
-        {"name": d.get("name") or "", "user": user_name(d), "updated_at": d.get("updated_at") or ""}
-        for d in etapas_map[cid]["deals"] if d.get("win") is None
-    ]
+
+    today = datetime.date.today()
+    weekday = today.weekday()  # 0=segunda, 5=sabado, 6=domingo
+    # ultimo dia util anterior
+    if weekday == 0:      # segunda -> sexta
+        prev_wd = today - datetime.timedelta(days=3)
+    elif weekday == 6:    # domingo -> sexta
+        prev_wd = today - datetime.timedelta(days=2)
+    elif weekday == 5:    # sabado -> sexta
+        prev_wd = today - datetime.timedelta(days=1)
+    else:
+        prev_wd = today - datetime.timedelta(days=1)
+
+    def fetch_contrato_by_date(date):
+        """Busca deals ATIVOS na etapa contrato enviado atualizados numa data especifica."""
+        after  = f"{date}T00:00:00-03:00"
+        before = f"{date}T23:59:59-03:00"
+        extra  = f"&updated_after={urllib.parse.quote(after)}&updated_before={urllib.parse.quote(before)}"
+        return [d for d in fetch_all(pid, cid, extra) if d.get("win") is None]
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_d1   = ex.submit(fetch_contrato_by_date, prev_wd)
+        fut_hoje = ex.submit(fetch_contrato_by_date, today)
+        d1_deals   = fut_d1.result()
+        hoje_deals = fut_hoje.result()
+
+    def slim_d1(d):
+        return {"name": d.get("name") or "", "user": user_name(d), "updated_at": d.get("updated_at") or ""}
+
+    contrato_d1   = [slim_d1(d) for d in d1_deals]
+    contrato_hoje = [slim_d1(d) for d in hoje_deals]
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
@@ -261,7 +289,8 @@ def load_funil_data(key, month, year):
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
         "contratos_busca_paga": len(contratos_busca_paga),
-        "contrato_ativos":      contrato_ativos_slim,
+        "contrato_d1":          contrato_d1,
+        "contrato_hoje":        contrato_hoje,
     }
 
 
@@ -561,7 +590,7 @@ function renderPane(key){
   </div>`;
 
   h+=renderFeed(s.feed,15);
-  h+=renderD1(key==='rp'?s.contrato_ativos:[],key==='rrr'?s.contrato_ativos:[],key);
+  h+=renderD1(key==='rp'?s.contrato_d1:[],key==='rrr'?s.contrato_d1:[],key==='rp'?s.contrato_hoje:[],key==='rrr'?s.contrato_hoje:[],key);
 
   // responsaveis
   const umap={};
@@ -724,7 +753,7 @@ function renderTotal(){
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
   h+=renderFeed(feedCombo,2);
-  h+=renderD1(rp.contrato_ativos,rrr.contrato_ativos,'total');
+  h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
   h+=renderContratosPorDia([...(rp.contratos_mes||[]),...(rrr.contratos_mes||[])],'total');
 
   // perdas combinadas com motivos
@@ -752,22 +781,22 @@ function prevWorkday(date){
 }
 function isoDate(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 
-function renderD1(rpAtivos,rrrAtivos,paneKey){
-  const now=new Date();
-  const todayStr=isoDate(now);
-  const prevWd=prevWorkday(now);
-  const prevWdStr=isoDate(prevWd);
-  const isMonday=now.getDay()===1;
+function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
+  const isMonday=new Date().getDay()===1;
   const d1Lbl=isMonday?'Sexta-feira':'Ontem';
 
-  // combinar funis relevantes com tag
-  let all=[];
-  if(paneKey==='rp')   all=[...(rpAtivos||[]).map(d=>({...d,_f:'RP'}))];
-  else if(paneKey==='rrr') all=[...(rrrAtivos||[]).map(d=>({...d,_f:'RRR'}))];
-  else all=[...(rpAtivos||[]).map(d=>({...d,_f:'RP'})),...(rrrAtivos||[]).map(d=>({...d,_f:'RRR'}))];
-
-  const d1=all.filter(d=>(d.updated_at||'').startsWith(prevWdStr));
-  const dHoje=all.filter(d=>(d.updated_at||'').startsWith(todayStr));
+  // montar listas com tag de funil
+  let d1=[], dHoje=[];
+  if(paneKey==='rp'){
+    d1=[...(rpD1||[]).map(d=>({...d,_f:'RP'}))];
+    dHoje=[...(rpHoje||[]).map(d=>({...d,_f:'RP'}))];
+  }else if(paneKey==='rrr'){
+    d1=[...(rrrD1||[]).map(d=>({...d,_f:'RRR'}))];
+    dHoje=[...(rrrHoje||[]).map(d=>({...d,_f:'RRR'}))];
+  }else{
+    d1=[...(rpD1||[]).map(d=>({...d,_f:'RP'})),...(rrrD1||[]).map(d=>({...d,_f:'RRR'}))];
+    dHoje=[...(rpHoje||[]).map(d=>({...d,_f:'RP'})),...(rrrHoje||[]).map(d=>({...d,_f:'RRR'}))];
+  }
 
   let h=`<div class="d1-wrap">
     <div class="d1-hd">
@@ -776,7 +805,7 @@ function renderD1(rpAtivos,rrrAtivos,paneKey){
       <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
     </div><div class="d1-section">`;
 
-  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, aguardando assinatura</div>`;
+  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, movidos ontem e ainda aguardando</div>`;
   if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando</div>`;}
   else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">${d1Lbl.toLowerCase()}</span></div>`;});}
 
