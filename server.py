@@ -8,7 +8,7 @@ import json
 import urllib.request
 import urllib.parse
 import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = "68c30c8a73e14f0019be70b1"
@@ -1199,7 +1199,7 @@ if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
-    server = HTTPServer((HOST, PORT), Handler)
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
