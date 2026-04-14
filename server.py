@@ -153,7 +153,8 @@ def is_busca_paga(deal):
 
 def get_custom_date(deal, label_substring):
     """Retorna a data de um campo customizado pelo nome (case-insensitive).
-    Campos de data no RD Station costumam vir como 'YYYY-MM-DD' ou timestamp ISO.
+    O RD Station retorna datas customizadas no formato DD/MM/YYYY.
+    Converte sempre para YYYY-MM-DD para comparacoes internas.
     Retorna string 'YYYY-MM-DD' ou '' se nao encontrado/vazio."""
     for cf in (deal.get("deal_custom_fields") or []):
         lbl = (cf.get("custom_field") or {}).get("label", "")
@@ -161,9 +162,23 @@ def get_custom_date(deal, label_substring):
             val = (cf.get("value") or "").strip()
             if not val:
                 return ""
-            # Pode vir como timestamp ISO completo ou apenas YYYY-MM-DD
+            # Formato DD/MM/YYYY (padrao RD Station para campos de data)
+            if len(val) >= 10 and val[2] == "/" and val[5] == "/":
+                day, mon, yr = val[:2], val[3:5], val[6:10]
+                return f"{yr}-{mon}-{day}"
+            # Fallback: ISO YYYY-MM-DD ou timestamp
             return val[:10]
     return ""
+
+def fmt_custom_date(iso_date):
+    """Converte YYYY-MM-DD de volta para DD/MM/YYYY para exibir no frontend."""
+    if not iso_date or len(iso_date) < 10:
+        return iso_date or "--"
+    try:
+        yr, mon, day = iso_date[:4], iso_date[5:7], iso_date[8:10]
+        return f"{day}/{mon}/{yr}"
+    except Exception:
+        return iso_date
 
 def custom_date_in_month(deal, label_substring, month, year):
     """Verifica se o campo customizado de data esta no mes/ano dados."""
@@ -298,6 +313,18 @@ def load_funil_data(key, month, year):
                 seen_ea.add(did)
                 em_andamento.append({**d, "_pre_stage": nome_lower})
 
+    # ── assinaturas do mes ───────────────────────────────────────────────────
+    # Deals com campo "Data da assinatura" dentro do mes selecionado
+    seen_assin = set()
+    assinaturas_mes = []
+    for d in all_postcontrato_deals:
+        if not custom_date_in_month(d, "Data da assinatura", month, year):
+            continue
+        did = d.get("_id") or d.get("id")
+        if did and did not in seen_assin:
+            seen_assin.add(did)
+            assinaturas_mes.append(d)
+
     # ── busca paga ────────────────────────────────────────────────────────────
     vendas_busca_paga    = [d for d in vendas_mes if is_busca_paga(d)]
     contratos_busca_paga = [d for d in contratos_mes if is_busca_paga(d)]
@@ -355,8 +382,10 @@ def load_funil_data(key, month, year):
             "fonte":            get_fonte(d),
             "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
             "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
-            "data_contrato":    get_custom_date(d, "Data do contrato"),
-            "data_assinatura":  get_custom_date(d, "Data da assinatura"),
+            "data_contrato":     get_custom_date(d, "Data do contrato"),
+            "data_assinatura":   get_custom_date(d, "Data da assinatura"),
+            "data_contrato_fmt": fmt_custom_date(get_custom_date(d, "Data do contrato")),
+            "data_assinatura_fmt": fmt_custom_date(get_custom_date(d, "Data da assinatura")),
         }
         return out
 
@@ -377,13 +406,17 @@ def load_funil_data(key, month, year):
     today_str   = str(today)
 
     def slim_d1(d):
+        dc = get_custom_date(d, "Data do contrato")
+        da = get_custom_date(d, "Data da assinatura")
         return {
-            "name":            d.get("name") or "",
-            "user":            user_name(d),
-            "data_contrato":   get_custom_date(d, "Data do contrato"),
-            "data_assinatura": get_custom_date(d, "Data da assinatura"),
-            "current_stage":   (d.get("deal_stage") or {}).get("name") or "",
-            "updated_at":      d.get("updated_at") or "",
+            "name":                d.get("name") or "",
+            "user":                user_name(d),
+            "data_contrato":       dc,
+            "data_assinatura":     da,
+            "data_contrato_fmt":   fmt_custom_date(dc),
+            "data_assinatura_fmt": fmt_custom_date(da),
+            "current_stage":       (d.get("deal_stage") or {}).get("name") or "",
+            "updated_at":          d.get("updated_at") or "",
         }
 
     # Pool completo para D+1 (todos os deals pos-contrato + ok, sem filtro de mes)
@@ -416,6 +449,7 @@ def load_funil_data(key, month, year):
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
         "contratos_busca_paga": len(contratos_busca_paga),
+        "assinaturas_mes":      [slim(d) for d in assinaturas_mes],
         "contrato_d1":          contrato_d1,
         "contrato_hoje":        contrato_hoje,
     }
@@ -454,13 +488,13 @@ main{padding:2rem;max-width:1400px;margin:0 auto}
 .tab-btn{padding:8px 20px;border-radius:8px;font-size:13px;font-weight:600;font-family:'Syne',sans-serif;cursor:pointer;border:none;background:transparent;color:var(--muted);transition:all .2s;letter-spacing:.02em}
 .tab-btn.active{background:var(--surface2);color:var(--text);border:1px solid var(--border2)}
 .tab-btn.total-tab.active{background:rgba(240,168,48,.15);color:var(--amber);border-color:rgba(240,168,48,.4)}
-.summary-grid-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:2rem}
+.summary-grid-5{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:2rem}
 .summary-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem;position:relative;overflow:hidden}
 .summary-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
-.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}
+.summary-card.blue::before{background:var(--blue)}.summary-card.green::before{background:var(--green)}.summary-card.red::before{background:var(--red)}.summary-card.amber::before{background:var(--amber)}.summary-card.purple::before{background:var(--purple)}.summary-card.teal::before{background:var(--teal)}
 .sc-label{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem}
 .sc-val{font-size:38px;font-weight:700;line-height:1;margin-bottom:.3rem}
-.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}
+.sc-val.blue{color:var(--blue)}.sc-val.green{color:var(--green)}.sc-val.red{color:var(--red)}.sc-val.amber{color:var(--amber)}.sc-val.purple{color:var(--purple)}.sc-val.teal{color:var(--teal)}
 .sc-sub{font-size:11px;color:var(--muted);font-family:'DM Mono',monospace}
 .section-hd{display:flex;align-items:center;gap:10px;margin-bottom:1rem}
 .section-hd h3{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -695,7 +729,7 @@ function renderFeed(feed,limit){
 function renderPane(key){
   const s=STATE[key];if(!s)return'';
   const totAtivo=(s.em_andamento||[]).length;
-  const totV=s.vendas.length,totC=(s.contratos_mes||[]).length,totP=s.perdas.length;
+  const totV=s.vendas.length,totC=(s.contratos_mes||[]).length,totP=s.perdas.length,totAssin=(s.assinaturas_mes||[]).length;
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
   const mmap={};s.perdas.forEach(d=>{const m=d.deal_lost_reason?.name||'--';mmap[m]=(mmap[m]||0)+1;});
@@ -703,7 +737,8 @@ function renderPane(key){
 
   let h=`<div class="summary-grid-5">
     <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
-    <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">no mes</div></div>
+    <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">campo Data do contrato</div></div>
+    <div class="summary-card teal"><div class="sc-label">Assinaturas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val teal">${totAssin}</div><div class="sc-sub">campo Data da assinatura</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">${wdD} dias uteis decorridos</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
@@ -741,7 +776,7 @@ function renderPane(key){
     h+=`<hr class="resp-divider">`;
     // contratos com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="resp-row-val" style="color:var(--blue)">${data.contratos.length}</span></div>`;
-    if(data.contratos.length){h+=`<div class="resp-deal-list">`;data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato||fdate(d.updated_at)}</span></div>`;});h+=`</div>`;}
+    if(data.contratos.length){h+=`<div class="resp-deal-list">`;data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato_fmt||'--'}</span></div>`;});h+=`</div>`;}
     // vendas com lista
     h+=`<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span><span class="resp-row-val" style="color:var(--green)">${data.vendas.length}</span></div>`;
     if(data.vendas.length){h+=`<div class="resp-deal-list">`;data.vendas.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${fdate(d.closed_at)}</span></div>`;});h+=`</div>`;}
@@ -777,7 +812,7 @@ function renderPane(key){
   // contratos do mes
   h+=`<div class="section-hd" style="margin-top:2rem"><h3>Contratos enviados - ${MN[selM]}/${selY}</h3><span class="cnt blue">${totC} total</span><div class="section-line"></div></div>`;
   if(!totC){h+=`<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhum contrato neste periodo</div>`;}
-  else{h+=`<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>`;s.contratos_mes.forEach(d=>{h+=`<tr><td class="dn" style="color:var(--blue)">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d.data_contrato||fdate(d.updated_at)}</td></tr>`;});h+=`</tbody></table></div>`;}
+  else{h+=`<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>`;s.contratos_mes.forEach(d=>{h+=`<tr><td class="dn" style="color:var(--blue)">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d.data_contrato_fmt||'--'}</td></tr>`;});h+=`</tbody></table></div>`;}
 
   // vendas do mes
   h+=`<div class="section-hd"><h3>Vendas fechadas - ${MN[selM]}/${selY}</h3><span class="cnt green">${totV} total</span><div class="section-line"></div></div>`;
@@ -803,6 +838,7 @@ function renderTotal(){
   const rpC=(rp.contratos_mes||[]).length,rrrC=(rrr.contratos_mes||[]).length,totC=rpC+rrrC;
   const rpA=(rp.em_andamento||[]).length,rrrA=(rrr.em_andamento||[]).length,totA=rpA+rrrA;
   const totP=rp.perdas.length+rrr.perdas.length;
+  const rpAssin=(rp.assinaturas_mes||[]).length,rrrAssin=(rrr.assinaturas_mes||[]).length,totAssin=rpAssin+rrrAssin;
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
 
@@ -811,6 +847,7 @@ function renderTotal(){
   let h=`<div class="summary-grid-5">
     <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
+    <div class="summary-card teal"><div class="sc-label">Assinaturas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val teal">${totAssin}</div><div class="sc-sub">RP: ${rpAssin} / RRR: ${rrrAssin}</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
     <div class="summary-card red"><div class="sc-label">Perdas - ambos funis</div><div class="sc-val red">${totP}</div><div class="sc-sub">historico total</div></div>
@@ -828,12 +865,14 @@ function renderTotal(){
   h+=`<div class="total-split">
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RP</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rpC}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Assinaturas</span><span class="total-row-val" style="color:var(--teal)">${rpAssin}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rpV}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento (Desenv./Tem perfil)</span><span class="total-row-val" style="color:var(--blue)">${rpA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
     </div>
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RRR Mae</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rrrC}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Assinaturas</span><span class="total-row-val" style="color:var(--teal)">${rrrAssin}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rrrV}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento (Desenv./Tem perfil)</span><span class="total-row-val" style="color:var(--blue)">${rrrA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
@@ -886,7 +925,7 @@ function renderTotal(){
     </div>`;
     if(data.contratos.length){
       h+=`<div id="${uid}-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">`;
-      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato||fdate(d.updated_at)}</span></div>`;});
+      data.contratos.forEach(d=>{h+=`<div class="resp-deal-item"><span class="resp-deal-name" title="${d.name||''}">${d.name||'--'}</span><span class="resp-deal-date">${d.data_contrato_fmt||'--'}</span></div>`;});
       h+=`</div></div>`;
     }
     // vendas — clicavel para abrir/fechar lista
@@ -962,11 +1001,11 @@ function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
 
   h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — contrato em ${d1Lbl}, aguardando assinatura</div>`;
   if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato sem assinatura no dia util anterior</div>`;}
-  else{d1.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato||'--'}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">aguard. assin.</span></div>`;});}
+  else{d1.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato_fmt||'--'}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">aguard. assin.</span></div>`;});}
 
   h+=`<div class="d1-section-lbl">Contrato hoje — aguardando assinatura</div>`;
   if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato hoje sem assinatura</div>`;}
-  else{dHoje.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato||'--'}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
+  else{dHoje.forEach(d=>{const stg=d.current_stage?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''} · contrato: ${d.data_contrato_fmt||'--'}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
 
   h+=`</div></div>`;
   return h;
