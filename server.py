@@ -29,6 +29,9 @@ FUNIS = {
         ],
         "ok_stage_id":      "68d99bd829688b00193d8962",
         "contrato_stage_id":"68a714f1b3f7b8001c750c1e",
+        # Etapas pre-contrato monitoradas para "Em andamento"
+        # Busca por nome (case-insensitive) pois IDs podem variar
+        "pre_contrato_nomes": ["desenvolvimento", "tem perfil"],
     },
     "rrr": {
         "id":   "693873d32abcdb001f8409c3",
@@ -44,6 +47,8 @@ FUNIS = {
         ],
         "ok_stage_id":      "6938752561fe57001f7540f5",
         "contrato_stage_id":"693873d32abcdb001f8409c6",
+        # Etapas pre-contrato monitoradas para "Em andamento"
+        "pre_contrato_nomes": ["desenvolvimento", "tem perfil"],
     }
 }
 
@@ -65,6 +70,25 @@ def fetch_all(pipeline_id, stage_id, extra=""):
             break
         page += 1
     return deals
+
+def fetch_pipeline_stages(pipeline_id):
+    """Retorna lista de etapas do pipeline via API."""
+    try:
+        d = rd_get(f"/deal_pipelines/{pipeline_id}")
+        return d.get("deal_stages") or []
+    except Exception:
+        return []
+
+def fetch_deals_by_stage_name(pipeline_id, stage_name_lower):
+    """Busca deals de uma etapa pelo nome (case-insensitive). Retorna (stage_id, deals)."""
+    stages = fetch_pipeline_stages(pipeline_id)
+    for s in stages:
+        if stage_name_lower in (s.get("name") or "").lower():
+            sid = s.get("_id") or s.get("id")
+            if sid:
+                deals = fetch_all(pipeline_id, sid)
+                return sid, deals
+    return None, []
 
 def fetch_stage_active(pipeline_id, stage_id):
     return [x for x in fetch_all(pipeline_id, stage_id) if x.get("win") is None]
@@ -128,23 +152,54 @@ def is_busca_paga(deal):
     return origem.startswith("busca paga") or fonte.startswith("busca paga")
 
 # ── main loader ───────────────────────────────────────────────────────────────
+def get_contrato_entry_date(d):
+    """Retorna a data (YYYY-MM-DD) em que o deal entrou na etapa Contrato enviado.
+    Tenta multiplos campos da API RD Station em ordem de confiabilidade.
+    Se nao encontrar nenhum campo de data de etapa, usa updated_at como fallback."""
+    candidates = [
+        d.get("deal_stage_updated_at"),
+        d.get("last_stage_update"),
+        d.get("stage_updated_at"),
+        d.get("deal_stage_changed_at"),
+        d.get("moved_at"),
+    ]
+    ds = d.get("deal_stage")
+    if isinstance(ds, dict):
+        candidates += [ds.get("updated_at"), ds.get("created_at"), ds.get("entered_at")]
+    # fallback: updated_at geral
+    candidates.append(d.get("updated_at"))
+    for v in candidates:
+        if v:
+            return v[:10]
+    return ""
+
 def load_funil_data(key, month, year):
     funil = FUNIS[key]
     pid   = funil["id"]
 
     tasks = {}
-    with ThreadPoolExecutor(max_workers=16) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_stage_active, pid, e["id"])] = ("active", e)
-        tasks[ex.submit(fetch_ok_stage,   pid, funil["ok_stage_id"])]       = ("ok",   None)
-        tasks[ex.submit(fetch_ok_stage,   pid, funil["contrato_stage_id"])] = ("contrato_all", None)
+        tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_lost_stage, pid, e["id"])] = ("lost", e)
+        # Buscar TODOS os deals de TODAS as etapas pos-contrato (para contar contratos do mes)
+        # Isso inclui deals que ja avanaram alem de "Contrato enviado"
+        all_postcontrato_stage_ids = [e["id"] for e in funil["etapas"]]
+        for sid in all_postcontrato_stage_ids:
+            tasks[ex.submit(fetch_all, pid, sid)] = ("postcontrato_all", sid)
+        # Buscar deals OK (vendidos) que passaram pelo contrato
+        tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
+        # Buscar etapas pre-contrato (Desenvolvimento, Tem perfil) pelo nome
+        for nome_lower in funil.get("pre_contrato_nomes", []):
+            tasks[ex.submit(fetch_deals_by_stage_name, pid, nome_lower)] = ("pre_contrato", nome_lower)
 
-    etapas_map   = {e["id"]: {**e, "deals": []} for e in funil["etapas"]}
-    ok_deals     = []
-    contrato_all = []
-    todas_perdas = []
+    etapas_map        = {e["id"]: {**e, "deals": []} for e in funil["etapas"]}
+    ok_deals          = []
+    todas_perdas      = []
+    postcontrato_pool = {}   # stage_id -> list of all deals (win=any)
+    pre_contrato_map  = {}   # nome_lower -> list of deals
 
     for fut in as_completed(tasks):
         kind, meta = tasks[fut]
@@ -153,39 +208,77 @@ def load_funil_data(key, month, year):
             etapas_map[meta["id"]]["deals"] = result
         elif kind == "ok":
             ok_deals = result
-        elif kind == "contrato_all":
-            contrato_all = result
         elif kind == "lost":
             todas_perdas.extend(result)
+        elif kind == "postcontrato_all":
+            sid = meta
+            if sid not in postcontrato_pool:
+                postcontrato_pool[sid] = []
+            postcontrato_pool[sid].extend(result)
+        elif kind == "pre_contrato":
+            nome_lower = meta
+            sid_result, deals_result = result  # tuple (sid, deals)
+            pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
 
-    # FIX 1: filtrar etapas ativas pelo mes selecionado usando created_at
-    # created_at = quando o deal foi criado/chegou ao funil — proxy correto para mes de entrada
+    # ── etapas ativas filtradas pelo mes (para exibicao por etapa) ────────────
     etapas_data = []
     for e in funil["etapas"]:
         all_active = etapas_map[e["id"]]["deals"]
         mes_active = [d for d in all_active if in_month(d, month, year, "created_at")]
         etapas_data.append({**e, "deals": mes_active})
 
-    # vendas do mes (pelo closed_at)
+    # ── vendas do mes (pelo closed_at) ────────────────────────────────────────
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
-    # FIX 2: contratos do mes — deals criados no mes que passaram pela etapa de contrato
-    # ativos na etapa agora com created_at no mes + ganhos/perdidos com created_at no mes
-    contrato_active_mes = [d for d in etapas_map[funil["contrato_stage_id"]]["deals"]
-                           if in_month(d, month, year, "created_at")]
-    contrato_ok_mes     = [d for d in contrato_all
-                           if in_month(d, month, year, "created_at")]
-    # deduplicar por _id
-    seen = set()
+    # ── CONTRATOS DO MES (alteracao #1) ──────────────────────────────────────
+    # Um deal conta como "contrato do mes" se foi movido para a etapa
+    # "Contrato enviado" dentro do mes selecionado — independente de onde esteja agora.
+    #
+    # Coleta todos os deals de todas as etapas pos-contrato (ativas) +
+    # deals vendidos (ok) que teriam passado pelo contrato.
+    # O filtro e feito pela data de entrada no contrato (get_contrato_entry_date).
+    seen_contrato = set()
     contratos_mes = []
-    for d in contrato_active_mes + contrato_ok_mes:
-        did = d.get("_id") or d.get("id")
-        if did not in seen:
-            seen.add(did)
-            contratos_mes.append(d)
 
-    # FIX 3: vendas e contratos por busca paga
+    # Deals atualmente nas etapas pos-contrato (incluindo a propria etapa "Contrato enviado")
+    all_postcontrato_deals = []
+    for sid, deals in postcontrato_pool.items():
+        all_postcontrato_deals.extend(deals)
+    # Adicionar deals vendidos (que saem do funil com win=True)
+    all_postcontrato_deals.extend(ok_deals)
+
+    for d in all_postcontrato_deals:
+        entry_date = get_contrato_entry_date(d)
+        if not entry_date:
+            continue
+        try:
+            dt = datetime.date.fromisoformat(entry_date)
+        except Exception:
+            continue
+        if dt.month == month and dt.year == year:
+            did = d.get("_id") or d.get("id")
+            if did and did not in seen_contrato:
+                seen_contrato.add(did)
+                contratos_mes.append(d)
+
+    # ── EM ANDAMENTO = etapas pre-contrato no mes, sem contrato ainda (alteracao #3) ──
+    # Negociacoes que chegaram a "Desenvolvimento" ou "Tem perfil" no mes selecionado
+    # (pelo created_at) e que ainda nao avancaram para contrato.
+    em_andamento = []
+    for nome_lower, info in pre_contrato_map.items():
+        deals = info.get("deals") or []
+        for d in deals:
+            if not in_month(d, month, year, "created_at"):
+                continue
+            if d.get("win") is not None:  # ja vendido ou perdido
+                continue
+            did = d.get("_id") or d.get("id")
+            if did in seen_contrato:  # ja foi para contrato
+                continue
+            em_andamento.append({**d, "_pre_stage": nome_lower})
+
+    # ── busca paga ────────────────────────────────────────────────────────────
     vendas_busca_paga    = [d for d in vendas_mes if is_busca_paga(d)]
     contratos_busca_paga = [d for d in contratos_mes if is_busca_paga(d)]
 
@@ -227,8 +320,7 @@ def load_funil_data(key, month, year):
         })
     feed_candidates.sort(key=lambda x: x["ts"], reverse=True)
 
-    # FIX 4: valor total por responsavel (amount_total)
-    # serializar deals com amount_total e origem para uso no front
+    # serializar deals
     def slim(d, extra_fields=None):
         """Versao reduzida do deal para serializar no JSON."""
         ds = d.get("deal_stage")
@@ -243,69 +335,49 @@ def load_funil_data(key, month, year):
             "fonte":            get_fonte(d),
             "deal_stage":       {"name": ds.get("name") or ""} if isinstance(ds, dict) else None,
             "deal_lost_reason": {"name": dlr.get("name") or ""} if isinstance(dlr, dict) else None,
+            "contrato_entry_date": get_contrato_entry_date(d),
         }
         return out
 
-    # D+1 e Hoje: filtrar deals ativos na etapa contrato enviado
-    # pelo campo deal_stage_updated_at = quando o deal ENTROU nessa etapa (nao o updated_at geral)
-    cid = funil["contrato_stage_id"]
-    ativos_contrato = [d for d in etapas_map[cid]["deals"] if d.get("win") is None]
-
+    # ── D+1 e Hoje (alteracao #2) ─────────────────────────────────────────────
+    # D+1 = negociacoes movidas para "Contrato enviado" no dia util ANTERIOR (ontem)
+    # independente de onde o deal esteja agora no funil.
+    # Usa contratos_mes (todos que fizeram contrato no mes) e filtra por data de entrada.
     today = datetime.date.today()
     weekday = today.weekday()  # 0=segunda
     if weekday == 0:
         prev_wd = today - datetime.timedelta(days=3)  # segunda -> sexta
+    elif weekday == 6:
+        prev_wd = today - datetime.timedelta(days=2)  # domingo -> sexta
     else:
         prev_wd = today - datetime.timedelta(days=1)
 
-    prev_wd_str = str(prev_wd)   # "YYYY-MM-DD"
-    today_str   = str(today)     # "YYYY-MM-DD"
-
-    # Logar todos os campos do primeiro deal para descobrir campo de data de entrada na etapa
-    if ativos_contrato:
-        sample = ativos_contrato[0]
-        date_fields = {k: v for k, v in sample.items()
-                       if isinstance(v, str) and ("at" in k or "date" in k or "stage" in k or "update" in k or "creat" in k)}
-        print(f"   [DEBUG DATE FIELDS] {date_fields}")
-        ds = sample.get("deal_stage")
-        if isinstance(ds, dict):
-            print(f"   [DEBUG DEAL_STAGE] {ds}")
-
-    def get_stage_date(d):
-        # tentar varios campos possiveis da API RD Station
-        candidates = [
-            d.get("deal_stage_updated_at"),
-            d.get("last_stage_update"),
-            d.get("stage_updated_at"),
-            d.get("deal_stage_changed_at"),
-            d.get("moved_at"),
-        ]
-        ds = d.get("deal_stage")
-        if isinstance(ds, dict):
-            candidates += [ds.get("updated_at"), ds.get("created_at"), ds.get("entered_at")]
-        for v in candidates:
-            if v:
-                return v[:10]
-        return ""
+    prev_wd_str = str(prev_wd)
+    today_str   = str(today)
 
     def slim_d1(d):
         return {
-            "name":       d.get("name") or "",
-            "user":       user_name(d),
-            "stage_date": get_stage_date(d),
-            "updated_at": d.get("updated_at") or "",
+            "name":             d.get("name") or "",
+            "user":             user_name(d),
+            "stage_date":       get_contrato_entry_date(d),
+            "updated_at":       d.get("updated_at") or "",
+            "current_stage":    (d.get("deal_stage") or {}).get("name") or "",
         }
 
-    contrato_d1   = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == prev_wd_str]
-    contrato_hoje = [slim_d1(d) for d in ativos_contrato if get_stage_date(d) == today_str]
-    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)} total_ativos={len(ativos_contrato)}")
-    if ativos_contrato:
-        print(f"   [DEBUG SAMPLE stage_date] {get_stage_date(ativos_contrato[0])!r}")
+    # D+1: movidos para contrato ontem (dia util anterior) — todos os deals do mes
+    contrato_d1   = [slim_d1(d) for d in contratos_mes
+                     if get_contrato_entry_date(d) == prev_wd_str]
+    contrato_hoje = [slim_d1(d) for d in contratos_mes
+                     if get_contrato_entry_date(d) == today_str]
+
+    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)} total_contratos_mes={len(contratos_mes)}")
+    print(f"   [DEBUG EM_ANDAMENTO] pre_contrato={len(em_andamento)} etapas={list(pre_contrato_map.keys())}")
 
     return {
         "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
         "vendas":               [slim(d) for d in vendas_mes],
         "contratos_mes":        [slim(d) for d in contratos_mes],
+        "em_andamento":         [slim(d) for d in em_andamento],
         "perdas":               [slim(d) for d in todas_perdas],
         "feed":                 feed_candidates[:60],
         "vendas_busca_paga":    len(vendas_busca_paga),
@@ -588,7 +660,7 @@ function renderFeed(feed,limit){
 // ─── renderPane ───────────────────────────────────────────────────────────────
 function renderPane(key){
   const s=STATE[key];if(!s)return'';
-  const totAtivo=s.etapas.reduce((a,e)=>a+e.deals.length,0);
+  const totAtivo=(s.em_andamento||[]).length;
   const totV=s.vendas.length,totC=(s.contratos_mes||[]).length,totP=s.perdas.length;
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
@@ -596,7 +668,7 @@ function renderPane(key){
   const msorted=Object.entries(mmap).sort((a,b)=>b[1]-a[1]);
 
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">no mes selecionado</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">${totAtivo}</div><div class="sc-sub">Desenv. / Tem perfil · sem contrato</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">no mes</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">${wdD} dias uteis decorridos</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
@@ -615,7 +687,8 @@ function renderPane(key){
 
   // responsaveis
   const umap={};
-  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
+  s.etapas.forEach(e=>e.deals.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;}));
+  (s.em_andamento||[]).forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;});
   s.vendas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].vendas.push(d);umap[u].valor+=(d.amount_total||0);});
   if(s.contratos_mes)s.contratos_mes.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
   s.perdas.forEach(d=>{const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
@@ -645,8 +718,20 @@ function renderPane(key){
   });
   h+=`</div>`;
 
+  // em andamento (pre-contrato)
+  const eaList=s.em_andamento||[];
+  if(eaList.length){
+    h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenv./Tem perfil sem contrato</h3><span class="cnt blue">${eaList.length} negociacoes</span><div class="section-line"></div></div>`;
+    h+=`<div class="stage-row" id="ea-${key}"><div class="stage-header" onclick="tog('ea-${key}')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Em andamento (pre-contrato) — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaList.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Entrada</th></tr></thead><tbody>`;
+    eaList.forEach(d=>{
+      const stgName=d.deal_stage?.name||d._pre_stage||'--';
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.created_at||d.updated_at)}</td></tr>`;
+    });
+    h+=`</tbody></table></div></div>`;
+  }
+
   // etapas
-  h+=`<div class="section-hd"><h3>Negociacoes por etapa</h3><span class="cnt blue">${totAtivo} total</span><div class="section-line"></div></div><div class="stages-wrap">`;
+  h+=`<div class="section-hd"><h3>Negociacoes por etapa (pos-contrato)</h3><span class="cnt blue">${s.etapas.reduce((a,e)=>a+e.deals.length,0)} ativas</span><div class="section-line"></div></div><div class="stages-wrap">`;
   s.etapas.forEach((e,ei)=>{
     const count=e.deals.length;
     h+=`<div class="stage-row" id="sr-${key}-${ei}"><div class="stage-header" onclick="tog('sr-${key}-${ei}')"><div class="stage-color" style="background:${e.cor}"></div><span class="stage-name">${e.nome}</span><span class="stage-count" style="color:${e.cor}">${count}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals">`;
@@ -682,7 +767,7 @@ function renderTotal(){
   const rp=STATE.rp,rrr=STATE.rrr;if(!rp||!rrr)return'';
   const rpV=rp.vendas.length,rrrV=rrr.vendas.length,totV=rpV+rrrV;
   const rpC=(rp.contratos_mes||[]).length,rrrC=(rrr.contratos_mes||[]).length,totC=rpC+rrrC;
-  const rpA=rp.etapas.reduce((a,e)=>a+e.deals.length,0),rrrA=rrr.etapas.reduce((a,e)=>a+e.deals.length,0),totA=rpA+rrrA;
+  const rpA=(rp.em_andamento||[]).length,rrrA=(rrr.em_andamento||[]).length,totA=rpA+rrrA;
   const totP=rp.perdas.length+rrr.perdas.length;
   const {proj,wdT,wdD,ritmo}=calcProj(totV,selM,selY);
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
@@ -690,7 +775,7 @@ function renderTotal(){
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
   let h=`<div class="summary-grid-5">
-    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">no mes selecionado</div></div>
+    <div class="summary-card blue"><div class="sc-label">Em andamento - ambos funis</div><div class="sc-val blue">${totA}</div><div class="sc-sub">Desenv. / Tem perfil · sem contrato</div></div>
     <div class="summary-card blue"><div class="sc-label">Contratos enviados - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val blue">${totC}</div><div class="sc-sub">RP: ${rpC} / RRR: ${rrrC}</div></div>
     <div class="summary-card green"><div class="sc-label">Vendas - ${MN[selM]}/${String(selY).slice(2)}</div><div class="sc-val green">${totV}</div><div class="sc-sub">RP: ${rpV} / RRR: ${rrrV}</div></div>
     <div class="summary-card amber"><div class="sc-label">Projecao total do mes</div><div class="sc-val amber">${proj}</div><div class="sc-sub">${ritmo}/dia - ${wdT} dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:${pct}%;background:var(--amber)"></div></div></div></div>
@@ -710,13 +795,13 @@ function renderTotal(){
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RP</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rpC}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rpV}</span></div>
-      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento</span><span class="total-row-val" style="color:var(--dim)">${rpA}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento (pre-contrato)</span><span class="total-row-val" style="color:var(--dim)">${rpA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
     </div>
     <div class="total-funil-block"><div class="total-funil-title">Funil Comercial RRR Mae</div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">${rrrC}</span></div>
       <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">${rrrV}</span></div>
-      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento</span><span class="total-row-val" style="color:var(--dim)">${rrrA}</span></div>
+      <div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--dim)"></span>Em andamento (pre-contrato)</span><span class="total-row-val" style="color:var(--dim)">${rrrA}</span></div>
       <div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;line-height:1.6">Etapas: ${etapasNomes}</div>
     </div>
   </div>`;
@@ -730,8 +815,8 @@ function renderTotal(){
   if(rrr.contratos_mes)rrr.contratos_mes.forEach(d=>addU(uname(d),'contratos',d));
   rp.perdas.forEach(d=>addU(uname(d),'perda',d));
   rrr.perdas.forEach(d=>addU(uname(d),'perda',d));
-  rp.etapas.forEach(e=>e.deals.forEach(d=>addU(uname(d),'ativo',d)));
-  rrr.etapas.forEach(e=>e.deals.forEach(d=>addU(uname(d),'ativo',d)));
+  (rp.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
+  (rrr.em_andamento||[]).forEach(d=>addU(uname(d),'ativo',d));
   const users=Object.entries(umap).filter(([n])=>!EXCLUDED.has(n)).sort((a,b)=>b[1].vendas.length-a[1].vendas.length||b[1].contratos.length-a[1].contratos.length);
 
   h+=`<div class="section-hd"><h3>Por responsavel - Total (ambos funis)</h3><span class="cnt amber">${users.length} vendedores</span><div class="section-line"></div></div><div class="resp-grid">`;
@@ -770,6 +855,20 @@ function renderTotal(){
     </div></div>`;
   });
   h+=`</div>`;
+
+  // em andamento combinado (pre-contrato) — ambos funis
+  const eaRP=(rp.em_andamento||[]).map(d=>({...d,_f:'RP'}));
+  const eaRRR=(rrr.em_andamento||[]).map(d=>({...d,_f:'RRR'}));
+  const eaTot=[...eaRP,...eaRRR];
+  if(eaTot.length){
+    h+=`<div class="section-hd" style="margin-top:2rem"><h3>Em andamento — Desenv./Tem perfil sem contrato · ambos funis</h3><span class="cnt blue">${eaTot.length} negociacoes</span><div class="section-line"></div></div>`;
+    h+=`<div class="stage-row" id="ea-total"><div class="stage-header" onclick="tog('ea-total')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Em andamento (pre-contrato) — ${MN[selM]}/${selY}</span><span class="stage-count" style="color:var(--blue)">${eaTot.length}</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Entrada</th></tr></thead><tbody>`;
+    eaTot.forEach(d=>{
+      const stgName=d.deal_stage?.name||d._pre_stage||'--';
+      h+=`<tr><td class="dn">${d.name||'--'}</td><td class="du">${uname(d)}</td><td class="dd">${d._f}</td><td class="dd">${stgName}</td><td class="dd">${fdate(d.created_at||d.updated_at)}</td></tr>`;
+    });
+    h+=`</tbody></table></div></div>`;
+  }
 
   // feed combinado — ULTIMO, apenas 2 itens
   const feedCombo=[...(rp.feed||[]),...(rrr.feed||[])].sort((a,b)=>b.ts.localeCompare(a.ts));
@@ -826,13 +925,13 @@ function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
       <span class="d1-badge blue">Hoje: ${dHoje.length} novos</span>
     </div><div class="d1-section">`;
 
-  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, movidos ontem e ainda aguardando</div>`;
-  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato aguardando</div>`;}
-  else{d1.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">${d1Lbl.toLowerCase()}</span></div>`;});}
+  h+=`<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 — ${d1Lbl}, movidos ontem para contrato</div>`;
+  if(!d1.length){h+=`<div class="d1-empty">Nenhum contrato no dia util anterior</div>`;}
+  else{d1.forEach(d=>{const stg=d.current_stage&&d.current_stage!=='Contrato enviado'?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--amber);background:var(--amber-dim)">${d1Lbl.toLowerCase()}</span></div>`;});}
 
   h+=`<div class="d1-section-lbl">Movidos para contrato enviado hoje</div>`;
   if(!dHoje.length){h+=`<div class="d1-empty">Nenhum contrato enviado hoje ainda</div>`;}
-  else{dHoje.forEach(d=>{h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
+  else{dHoje.forEach(d=>{const stg=d.current_stage&&d.current_stage!=='Contrato enviado'?` <span style="font-size:9px;color:var(--teal)">[${d.current_stage}]</span>`:'';h+=`<div class="d1-item"><div><div class="d1-name">${d.name||'--'}${stg}</div><div class="d1-user">${d.user||'--'}${paneKey==='total'?' · '+d._f:''}</div></div><span class="d1-tag" style="color:var(--blue);background:var(--blue-dim)">hoje</span></div>`;});}
 
   h+=`</div></div>`;
   return h;
