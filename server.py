@@ -621,10 +621,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     <div><div class="logo-text">Dashboard Comercial</div><div class="logo-sub">RD Station CRM</div></div>
   </div>
   <div class="header-right">
-    <div class="period-selector">
-      <button class="period-btn" data-m="3" data-y="2026">Mar/26</button>
-      <button class="period-btn active" data-m="4" data-y="2026">Abr/26</button>
-    </div>
+    <div class="period-selector" id="period-selector"></div>
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
     <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">&#127769;</button>
@@ -642,7 +639,10 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
   <div id="pane-total"></div>
 </main>
 <script>
-let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
+let STATE={rp:null,rrr:null};
+let selM=new Date().getMonth()+1;
+let selY=new Date().getFullYear();
+let curF='total';
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
@@ -1004,8 +1004,25 @@ function renderContratosPorDia(contratos,paneKey){
 function tog(id){const el=document.getElementById(id);if(!el)return;el.classList.toggle('open');}
 function togInline(id,arrowId){const el=document.getElementById(id);if(!el)return;const open=el.style.display==='none'||el.style.display==='';el.style.display=open?'block':'none';const arrow=document.getElementById(arrowId);if(arrow){arrow.style.transform=open?'rotate(90deg)':'';}}
 function switchF(k,btn){curF=k;document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');['rp','rrr','total'].forEach(function(f){document.getElementById('pane-'+f).style.display=f===k?'':'none';});}
-document.querySelectorAll('.period-btn').forEach(function(b){b.addEventListener('click',function(){document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});b.classList.add('active');selM=parseInt(b.dataset.m);selY=parseInt(b.dataset.y);loadAll();});});
-
+(function buildPeriodButtons(){
+  const now=new Date();
+  const curM=now.getMonth()+1,curY=now.getFullYear();
+  const prevDate=new Date(now.getFullYear(),now.getMonth()-1,1);
+  const prevM=prevDate.getMonth()+1,prevY=prevDate.getFullYear();
+  const sel=document.getElementById('period-selector');
+  [[prevM,prevY],[curM,curY]].forEach(function(pair,i){
+    const m=pair[0],y=pair[1];
+    const btn=document.createElement('button');
+    btn.className='period-btn'+(i===1?' active':'');
+    btn.dataset.m=m;btn.dataset.y=y;
+    btn.textContent=MN[m]+'/'+String(y).slice(2);
+    btn.addEventListener('click',function(){
+      document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});
+      btn.classList.add('active');selM=m;selY=y;loadAll();
+    });
+    sel.appendChild(btn);
+  });
+})();
 setInterval(loadAll,60*60*1000);
 setInterval(tickCountdown,1000);
 loadAll();
