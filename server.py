@@ -438,13 +438,11 @@ def load_funil_data(key, month, year):
     assinaturas_hoje_total  = len([d for d in assinaturas_mes
                                    if get_custom_date(d, "Data da assinatura") == today_str])
 
-    # ALTERACAO 1: assinaturas do mes cujo contrato foi feito no mesmo mes
     assinaturas_contrato_mes = len([
         d for d in assinaturas_mes
         if custom_date_in_month(d, "Data do contrato", month, year)
     ])
 
-    # ALTERACAO 2: vendas do mes cujo contrato foi feito no mesmo mes
     vendas_contrato_mes = len([
         d for d in vendas_mes
         if custom_date_in_month(d, "Data do contrato", month, year)
@@ -466,8 +464,8 @@ def load_funil_data(key, month, year):
         "vendas_hoje_total":        vendas_hoje_total,
         "contratos_hoje_total":     contratos_hoje_total,
         "assinaturas_hoje_total":   assinaturas_hoje_total,
-        "assinaturas_contrato_mes": assinaturas_contrato_mes,   # NOVO
-        "vendas_contrato_mes":      vendas_contrato_mes,        # NOVO
+        "assinaturas_contrato_mes": assinaturas_contrato_mes,
+        "vendas_contrato_mes":      vendas_contrato_mes,
     }
 
 
@@ -724,21 +722,34 @@ function renderAll(){
   document.getElementById('pane-total').innerHTML=renderTotal();
 }
 
-function renderFeed(feed,limit){
+// ── renderFeed: colapsavel, fechado por padrao ─────────────────────────────
+function renderFeed(feed,limit,feedId){
   const items=(feed||[]).slice(0,limit);
-  let h='<div class="feed-wrap"><div class="feed-hd"><span class="feed-hd-title">Ultimas movimentacoes no CRM</span><div class="feed-live"></div></div>';
-  if(!items.length){h+='<div class="empty">Nenhuma movimentacao encontrada</div>';}
-  items.forEach(function(f){
-    const cor=f.cor||'#888';
-    let label='';
-    if(f.tipo==='venda')label='Vendida';
-    else if(f.tipo==='contrato')label='Contrato enviado';
-    else if(f.tipo==='perda')label='Perdida em: '+f.etapa;
-    else label='Na etapa: '+f.etapa;
-    const funiTag=f.funil&&f.funil.includes('RRR')?'RRR':'RP';
-    h+='<div class="feed-item"><div class="feed-dot" style="background:'+cor+'"></div><div class="feed-body"><div class="feed-deal">'+f.nome+'</div><div class="feed-meta"><span style="color:var(--dim)">'+f.user+'</span><span style="color:var(--muted)">&#183;</span><span class="feed-badge" style="color:'+cor+';border-color:'+cor+'44;background:'+cor+'18">'+label+'</span><span style="color:var(--muted);font-size:10px">['+funiTag+']</span></div></div><div class="feed-ts">'+ftime(f.ts)+'</div></div>';
-  });
-  h+='</div>';return h;
+  const count=items.length;
+  let h='<div class="stage-row" id="'+feedId+'" style="margin-bottom:2rem">';
+  h+='<div class="stage-header" onclick="tog(\''+feedId+'\')">';
+  h+='<div class="stage-color" style="background:var(--green)"></div>';
+  h+='<span class="stage-name">Ultimas movimentacoes no CRM</span>';
+  h+='<div class="feed-live" style="margin-right:8px"></div>';
+  h+='<span class="stage-count" style="color:var(--green)">'+count+'</span>';
+  h+='<span class="stage-arrow">&#9654;</span>';
+  h+='</div>';
+  h+='<div class="stage-deals">';
+  if(!count){h+='<div class="empty">Nenhuma movimentacao encontrada</div>';}
+  else{
+    items.forEach(function(f){
+      const cor=f.cor||'#888';
+      let label='';
+      if(f.tipo==='venda')label='Vendida';
+      else if(f.tipo==='contrato')label='Contrato enviado';
+      else if(f.tipo==='perda')label='Perdida em: '+f.etapa;
+      else label='Na etapa: '+f.etapa;
+      const funiTag=f.funil&&f.funil.includes('RRR')?'RRR':'RP';
+      h+='<div class="feed-item"><div class="feed-dot" style="background:'+cor+'"></div><div class="feed-body"><div class="feed-deal">'+f.nome+'</div><div class="feed-meta"><span style="color:var(--dim)">'+f.user+'</span><span style="color:var(--muted)">&#183;</span><span class="feed-badge" style="color:'+cor+';border-color:'+cor+'44;background:'+cor+'18">'+label+'</span><span style="color:var(--muted);font-size:10px">['+funiTag+']</span></div></div><div class="feed-ts">'+ftime(f.ts)+'</div></div>';
+    });
+  }
+  h+='</div></div>';
+  return h;
 }
 
 function renderPane(key){
@@ -760,7 +771,6 @@ function renderPane(key){
     +'</div>';
 
   if(key==='rp'){
-    // ALTERACAO 3: Contratos por midia social ANTES de vendas por midia social
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">'
       +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+(s.contratos_busca_paga||0)+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
       +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+(s.vendas_busca_paga||0)+'</div><div class="sc-sub">origem "busca" no mes</div></div>'
@@ -798,15 +808,8 @@ function renderPane(key){
     +'</div></div>';
   });
   h+='</div>';
-  h+=renderFeed(s.feed,15);
-  const eaList=s.em_andamento||[];
-  h+='<div class="section-hd" style="margin-top:2rem"><h3>Em andamento - Desenvolvimento / Tem perfil</h3><span class="cnt blue">'+eaList.length+' negociacoes</span><div class="section-line"></div></div>';
-  if(!eaList.length){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>';}
-  else{
-    h+='<div class="stage-row" id="ea-'+key+'"><div class="stage-header" onclick="tog(\'ea-'+key+'\')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil - '+MN[selM]+'/'+selY+'</span><span class="stage-count" style="color:var(--blue)">'+eaList.length+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>';
-    eaList.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
-    h+='</tbody></table></div></div>';
-  }
+
+  // ── Etapas pos-contrato ──
   h+='<div class="section-hd"><h3>Negociacoes por etapa (pos-contrato)</h3><span class="cnt blue">'+s.etapas.reduce(function(a,e){return a+e.deals.length;},0)+' ativas</span><div class="section-line"></div></div><div class="stages-wrap">';
   s.etapas.forEach(function(e,ei){
     const count=e.deals.length;
@@ -815,13 +818,34 @@ function renderPane(key){
     else{h+='<table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Atualizado</th></tr></thead><tbody>';e.deals.forEach(function(d){h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});h+='</tbody></table>';}
     h+='</div></div>';
   });h+='</div>';
-  h+='<div class="section-hd" style="margin-top:2rem"><h3>Contratos enviados - '+MN[selM]+'/'+selY+'</h3><span class="cnt blue">'+totC+' total</span><div class="section-line"></div></div>';
+
+  // ── Contratos enviados ──
+  h+='<div class="section-hd"><h3>Contratos enviados - '+MN[selM]+'/'+selY+'</h3><span class="cnt blue">'+totC+' total</span><div class="section-line"></div></div>';
   if(!totC){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhum contrato neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>';s.contratos_mes.forEach(function(d){h+='<tr><td class="dn" style="color:var(--blue)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+(d.data_contrato_fmt||'--')+'</td></tr>';});h+='</tbody></table></div>';}
+
+  // ── Vendas fechadas ──
   h+='<div class="section-hd"><h3>Vendas fechadas - '+MN[selM]+'/'+selY+'</h3><span class="cnt green">'+totV+' total</span><div class="section-line"></div></div>';
   if(!totV){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma venda neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(62,207,142,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Fechado em</th></tr></thead><tbody>';s.vendas.forEach(function(d){h+='<tr><td class="dn" style="color:var(--green)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.closed_at)+'</td></tr>';});h+='</tbody></table></div>';}
+
+  // ── Contratos por dia ──
   h+=renderContratosPorDia(s.contratos_mes,key);
+
+  // ── Em andamento (DEPOIS de contratos por dia) ──
+  const eaList=s.em_andamento||[];
+  h+='<div class="section-hd" style="margin-top:2rem"><h3>Em andamento - Desenvolvimento / Tem perfil</h3><span class="cnt blue">'+eaList.length+' negociacoes</span><div class="section-line"></div></div>';
+  if(!eaList.length){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>';}
+  else{
+    h+='<div class="stage-row" id="ea-'+key+'"><div class="stage-header" onclick="tog(\'ea-'+key+'\')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil - '+MN[selM]+'/'+selY+'</span><span class="stage-count" style="color:var(--blue)">'+eaList.length+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>';
+    eaList.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
+    h+='</tbody></table></div></div>';
+  }
+
+  // ── Feed (DEPOIS de em andamento, fechado por padrao) ──
+  h+=renderFeed(s.feed,15,'feed-'+key);
+
+  // ── Perdas ──
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Perdas nas etapas finais</h3><span class="cnt red">'+totP+' total</span><div class="section-line"></div></div>';
   h+='<div class="motivos-grid">'+msorted.map(function(e){return '<div class="mc"><span class="mc-n">'+e[0]+'</span><span class="mc-v">'+e[1]+'</span></div>';}).join('')+'</div>';
   if(totP){
@@ -837,7 +861,6 @@ function hojeTag(n,color,borderColor,bgColor){
   return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#9679; '+n+' hoje</div>';
 }
 
-// ALTERACAO 1+2: card de "contrato no mes" para assinaturas e vendas
 function contratoMesTag(n,color,borderColor,bgColor){
   if(!n&&n!==0)return'';
   return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#128196; '+n+' c/ contrato no mes</div>';
@@ -853,26 +876,19 @@ function renderTotal(){
   const totPRFB=(rp.prfb_ativos||0)+(rrr.prfb_ativos||0);
   const p=calcProj(totV,selM,selY);const proj=p.proj,wdT=p.wdT,wdD=p.wdD,ritmo=p.ritmo;
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
-  // ALTERACAO 3: contratos por midia social ANTES de vendas
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const contratosHoje=(rp.contratos_hoje_total||0)+(rrr.contratos_hoje_total||0);
   const assinHoje=(rp.assinaturas_hoje_total||0)+(rrr.assinaturas_hoje_total||0);
   const vendasHoje=(rp.vendas_hoje_total||0)+(rrr.vendas_hoje_total||0);
-  // ALTERACAO 1: assinaturas com contrato no mes (ambos funis)
   const totAssinContratoMes=(rp.assinaturas_contrato_mes||0)+(rrr.assinaturas_contrato_mes||0);
-  // ALTERACAO 2: vendas com contrato no mes (ambos funis)
   const totVendasContratoMes=(rp.vendas_contrato_mes||0)+(rrr.vendas_contrato_mes||0);
 
   let h='<div class="total-hero">'
-    // Card Contratos - sem alteracao
     +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div>'+hojeTag(contratosHoje,'var(--blue)','rgba(79,143,255,.35)','rgba(79,143,255,.1)')+'</div>'
-    // ALTERACAO 1: Card Assinaturas com novo badge "c/ contrato no mes" antes do "hoje"
     +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+contratoMesTag(totAssinContratoMes,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
-    // ALTERACAO 2: Card Vendas com novo badge "c/ contrato no mes" antes do "hoje"
     +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div>'+contratoMesTag(totVendasContratoMes,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+hojeTag(vendasHoje,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+'</div>'
     +'</div>'
-    // ALTERACAO 3: Contratos por midia social ANTES de vendas por midia social
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">'
     +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+totBuscaPagaC+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
     +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
@@ -886,6 +902,8 @@ function renderTotal(){
     +'<div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">'
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">'+fmoney([...rp.vendas,...rrr.vendas].reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>'
     +'</div>';
+
+  // ── Por responsavel ──
   const umap={};
   function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
   rp.vendas.forEach(function(d){addU(uname(d),'vendas',d);});rrr.vendas.forEach(function(d){addU(uname(d),'vendas',d);});
@@ -916,6 +934,8 @@ function renderTotal(){
     +'</div></div>';
   });
   h+='</div>';
+
+  // ── Split por funil ──
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
   h+='<div class="total-split">'
     +'<div class="total-funil-block"><div class="total-funil-title">Funil Comercial RP</div>'
@@ -931,6 +951,12 @@ function renderTotal(){
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento</span><span class="total-row-val" style="color:var(--blue)">'+rrrA+'</span></div>'
     +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div></div>'
     +'</div>';
+
+  // ── D1 + Contratos por dia ──
+  h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
+  h+=renderContratosPorDia((rp.contratos_mes||[]).concat(rrr.contratos_mes||[]),'total');
+
+  // ── Em andamento (DEPOIS de contratos por dia) ──
   const eaRP=(rp.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});
   const eaRRR=(rrr.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});
   const eaTot=eaRP.concat(eaRRR);
@@ -941,10 +967,12 @@ function renderTotal(){
     eaTot.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._f+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
     h+='</tbody></table></div></div>';
   }
+
+  // ── Feed (DEPOIS de em andamento, fechado por padrao) ──
   const feedCombo=(rp.feed||[]).concat(rrr.feed||[]).sort(function(a,b){return b.ts.localeCompare(a.ts);});
-  h+=renderFeed(feedCombo,20);
-  h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
-  h+=renderContratosPorDia((rp.contratos_mes||[]).concat(rrr.contratos_mes||[]),'total');
+  h+=renderFeed(feedCombo,20,'feed-total');
+
+  // ── Perdas ──
   const todasPerdas=rp.perdas.concat(rrr.perdas);
   const mmapT={};todasPerdas.forEach(function(d){const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';mmapT[m]=(mmapT[m]||0)+1;});
   const msortedT=Object.entries(mmapT).sort(function(a,b){return b[1]-a[1];});
