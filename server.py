@@ -621,8 +621,9 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     <div><div class="logo-text">Dashboard Comercial</div><div class="logo-sub">RD Station CRM</div></div>
   </div>
   <div class="header-right">
-    <div class="period-selector" id="period-selector">
-      <!-- gerado dinamicamente pelo JS -->
+    <div class="period-selector">
+      <button class="period-btn" data-m="3" data-y="2026">Mar/26</button>
+      <button class="period-btn active" data-m="4" data-y="2026">Abr/26</button>
     </div>
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
@@ -641,23 +642,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
   <div id="pane-total"></div>
 </main>
 <script>
-const _now=new Date();
-let STATE={rp:null,rrr:null},selM=_now.getMonth()+1,selY=_now.getFullYear(),curF='total';
-// Gera botoes de todos os meses do ano corrente
-(function(){
-  const sel=document.getElementById('period-selector');
-  for(let m=1;m<=12;m++){
-    const btn=document.createElement('button');
-    btn.className='period-btn'+(m===selM&&_now.getFullYear()===selY?' active':'');
-    btn.dataset.m=m;btn.dataset.y=selY;
-    btn.textContent=MN[m]+'/'+String(selY).slice(2);
-    btn.addEventListener('click',function(){
-      document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});
-      btn.classList.add('active');selM=parseInt(btn.dataset.m);selY=parseInt(btn.dataset.y);loadAll();
-    });
-    sel.appendChild(btn);
-  }
-})();
+let STATE={rp:null,rrr:null},selM=4,selY=2026,curF='total';
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
@@ -1019,7 +1004,7 @@ function renderContratosPorDia(contratos,paneKey){
 function tog(id){const el=document.getElementById(id);if(!el)return;el.classList.toggle('open');}
 function togInline(id,arrowId){const el=document.getElementById(id);if(!el)return;const open=el.style.display==='none'||el.style.display==='';el.style.display=open?'block':'none';const arrow=document.getElementById(arrowId);if(arrow){arrow.style.transform=open?'rotate(90deg)':'';}}
 function switchF(k,btn){curF=k;document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');['rp','rrr','total'].forEach(function(f){document.getElementById('pane-'+f).style.display=f===k?'':'none';});}
-
+document.querySelectorAll('.period-btn').forEach(function(b){b.addEventListener('click',function(){document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});b.classList.add('active');selM=parseInt(b.dataset.m);selY=parseInt(b.dataset.y);loadAll();});});
 
 setInterval(loadAll,60*60*1000);
 setInterval(tickCountdown,1000);
