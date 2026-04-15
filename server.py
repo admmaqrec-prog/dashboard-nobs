@@ -9,6 +9,7 @@ import urllib.request
 import urllib.parse
 import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = "68c30c8a73e14f0019be70b1"
@@ -430,7 +431,6 @@ def load_funil_data(key, month, year):
         except Exception:
             prfb_ativos = []
 
-    # ── NOVOS: contagens do dia para os 3 cards principais ──
     vendas_hoje_total       = len([d for d in vendas_mes
                                    if (d.get("closed_at") or "")[:10] == today_str])
     contratos_hoje_total    = len([d for d in contratos_mes
@@ -451,7 +451,6 @@ def load_funil_data(key, month, year):
         "contrato_d1":          contrato_d1,
         "contrato_hoje":        contrato_hoje,
         "prfb_ativos":          len(prfb_ativos),
-        # Novos campos para contagem do dia
         "vendas_hoje_total":      vendas_hoje_total,
         "contratos_hoje_total":   contratos_hoje_total,
         "assinaturas_hoje_total": assinaturas_hoje_total,
@@ -757,7 +756,6 @@ function renderPane(key){
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">'+fmoney(s.vendas.reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>'
     +'</div>';
 
-  // responsaveis
   const umap={};
   s.etapas.forEach(function(e){e.deals.forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;});});
   (s.em_andamento||[]).forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;});
@@ -770,13 +768,10 @@ function renderPane(key){
   users.forEach(function(entry,i){
     const name=entry[0],data=entry[1];
     const color=COLORS[i%COLORS.length],init=name.split(' ').slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase();
-    h+='<div class="resp-card">'
-      +'<div class="resp-header">'
-      +'<div class="resp-avatar" style="background:'+color+'22;color:'+color+'">'+init+'</div>'
+    h+='<div class="resp-card"><div class="resp-header"><div class="resp-avatar" style="background:'+color+'22;color:'+color+'">'+init+'</div>'
       +'<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">'+name+'</div><span style="font-family:\'DM Mono\',monospace;font-size:13px;font-weight:700;color:var(--blue)">'+data.contratos.length+'c</span></div>'
       +'<div style="font-size:11px;color:var(--muted);font-family:\'DM Mono\',monospace">'+data.contratos.length+' contratos &middot; '+data.vendas.length+' vendas no mes</div></div>'
-      +'<div class="resp-total" style="color:'+color+'">'+data.contratos.length+'</div>'
-      +'</div><div class="resp-rows">';
+      +'<div class="resp-total" style="color:'+color+'">'+data.contratos.length+'</div></div><div class="resp-rows">';
     s.etapas.forEach(function(e){const c=data.et[e.nome]||0;if(!c)return;h+='<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:'+e.cor+'"></span>'+e.nome+'</span><span class="resp-row-val" style="color:'+e.cor+'">'+c+'</span></div>';});
     h+='<hr class="resp-divider">';
     h+='<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="resp-row-val" style="color:var(--blue)">'+data.contratos.length+'</span></div>';
@@ -788,23 +783,15 @@ function renderPane(key){
     +'</div></div>';
   });
   h+='</div>';
-
   h+=renderFeed(s.feed,15);
-
-  // em andamento
   const eaList=s.em_andamento||[];
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Em andamento - Desenvolvimento / Tem perfil</h3><span class="cnt blue">'+eaList.length+' negociacoes</span><div class="section-line"></div></div>';
   if(!eaList.length){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>';}
   else{
     h+='<div class="stage-row" id="ea-'+key+'"><div class="stage-header" onclick="tog(\'ea-'+key+'\')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil - '+MN[selM]+'/'+selY+'</span><span class="stage-count" style="color:var(--blue)">'+eaList.length+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>';
-    eaList.forEach(function(d){
-      const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';
-      h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';
-    });
+    eaList.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
     h+='</tbody></table></div></div>';
   }
-
-  // etapas
   h+='<div class="section-hd"><h3>Negociacoes por etapa (pos-contrato)</h3><span class="cnt blue">'+s.etapas.reduce(function(a,e){return a+e.deals.length;},0)+' ativas</span><div class="section-line"></div></div><div class="stages-wrap">';
   s.etapas.forEach(function(e,ei){
     const count=e.deals.length;
@@ -813,20 +800,13 @@ function renderPane(key){
     else{h+='<table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Atualizado</th></tr></thead><tbody>';e.deals.forEach(function(d){h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});h+='</tbody></table>';}
     h+='</div></div>';
   });h+='</div>';
-
-  // contratos do mes
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Contratos enviados - '+MN[selM]+'/'+selY+'</h3><span class="cnt blue">'+totC+' total</span><div class="section-line"></div></div>';
   if(!totC){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhum contrato neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>';s.contratos_mes.forEach(function(d){h+='<tr><td class="dn" style="color:var(--blue)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+(d.data_contrato_fmt||'--')+'</td></tr>';});h+='</tbody></table></div>';}
-
-  // vendas do mes
   h+='<div class="section-hd"><h3>Vendas fechadas - '+MN[selM]+'/'+selY+'</h3><span class="cnt green">'+totV+' total</span><div class="section-line"></div></div>';
   if(!totV){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma venda neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(62,207,142,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Fechado em</th></tr></thead><tbody>';s.vendas.forEach(function(d){h+='<tr><td class="dn" style="color:var(--green)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.closed_at)+'</td></tr>';});h+='</tbody></table></div>';}
-
   h+=renderContratosPorDia(s.contratos_mes,key);
-
-  // perdas
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Perdas nas etapas finais</h3><span class="cnt red">'+totP+' total</span><div class="section-line"></div></div>';
   h+='<div class="motivos-grid">'+msorted.map(function(e){return '<div class="mc"><span class="mc-n">'+e[0]+'</span><span class="mc-v">'+e[1]+'</span></div>';}).join('')+'</div>';
   if(totP){
@@ -854,26 +834,18 @@ function renderTotal(){
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
   const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
-
-  // Contagens do dia (soma dos dois funis)
   const contratosHoje=(rp.contratos_hoje_total||0)+(rrr.contratos_hoje_total||0);
   const assinHoje=(rp.assinaturas_hoje_total||0)+(rrr.assinaturas_hoje_total||0);
   const vendasHoje=(rp.vendas_hoje_total||0)+(rrr.vendas_hoje_total||0);
-
-  // MUDANÇA 1: 1ª linha = cards hero (contratos, assinaturas, vendas) com "X hoje"
-  // MUDANÇA 2: 2ª linha = mídia social (purple), antes dos 4 cards secundários
-  // 3ª linha = 4 cards secundários (em andamento, PRFB, projeção, perdas)
   let h='<div class="total-hero">'
     +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div>'+hojeTag(contratosHoje,'var(--blue)','rgba(79,143,255,.35)','rgba(79,143,255,.1)')+'</div>'
     +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
     +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div>'+hojeTag(vendasHoje,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+'</div>'
     +'</div>'
-    // 2ª linha: mídia social (trocada de lugar)
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">'
     +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
     +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+totBuscaPagaC+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
     +'</div>'
-    // 3ª linha: 4 cards secundários
     +'<div class="total-secondary">'
     +'<div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">'+totA+'</div><div class="sc-sub">Desenv. / Tem perfil no mes</div></div>'
     +'<div class="summary-card coral"><div class="sc-label">PRFB - ambos funis</div><div class="sc-val coral">'+totPRFB+'</div><div class="sc-sub">negociacoes ativas na etapa</div></div>'
@@ -883,57 +855,36 @@ function renderTotal(){
     +'<div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">'
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">'+fmoney([...rp.vendas,...rrr.vendas].reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>'
     +'</div>';
-
-  // responsaveis totais
   const umap={};
   function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
-  rp.vendas.forEach(function(d){addU(uname(d),'vendas',d);});
-  rrr.vendas.forEach(function(d){addU(uname(d),'vendas',d);});
+  rp.vendas.forEach(function(d){addU(uname(d),'vendas',d);});rrr.vendas.forEach(function(d){addU(uname(d),'vendas',d);});
   if(rp.contratos_mes)rp.contratos_mes.forEach(function(d){addU(uname(d),'contratos',d);});
   if(rrr.contratos_mes)rrr.contratos_mes.forEach(function(d){addU(uname(d),'contratos',d);});
-  rp.perdas.forEach(function(d){addU(uname(d),'perda',d);});
-  rrr.perdas.forEach(function(d){addU(uname(d),'perda',d);});
-  (rp.em_andamento||[]).forEach(function(d){addU(uname(d),'ativo',d);});
-  (rrr.em_andamento||[]).forEach(function(d){addU(uname(d),'ativo',d);});
+  rp.perdas.forEach(function(d){addU(uname(d),'perda',d);});rrr.perdas.forEach(function(d){addU(uname(d),'perda',d);});
+  (rp.em_andamento||[]).forEach(function(d){addU(uname(d),'ativo',d);});(rrr.em_andamento||[]).forEach(function(d){addU(uname(d),'ativo',d);});
   const users=Object.entries(umap).filter(function(e){return !EXCLUDED.has(e[0]);}).sort(function(a,b){return b[1].contratos.length-a[1].contratos.length||b[1].vendas.length-a[1].vendas.length;});
-
   h+='<div class="section-hd"><h3>Por responsavel - Total (ambos funis)</h3><span class="cnt amber">'+users.length+' vendedores</span><div class="section-line"></div></div><div class="resp-grid">';
   users.forEach(function(entry,i){
     const name=entry[0],data=entry[1];
     const color=COLORS[i%COLORS.length],init=name.split(' ').slice(0,2).map(function(w){return w[0]||'';}).join('').toUpperCase();
     const uid='tot-'+i;
-    h+='<div class="resp-card">'
-      +'<div class="resp-header">'
-      +'<div class="resp-avatar" style="background:'+color+'22;color:'+color+'">'+init+'</div>'
+    h+='<div class="resp-card"><div class="resp-header"><div class="resp-avatar" style="background:'+color+'22;color:'+color+'">'+init+'</div>'
       +'<div style="flex:1;min-width:0"><div style="display:flex;align-items:center;gap:8px"><div class="resp-name">'+name+'</div><span style="font-family:\'DM Mono\',monospace;font-size:13px;font-weight:700;color:var(--blue)">'+data.contratos.length+'c</span></div>'
       +'<div style="font-size:11px;color:var(--muted);font-family:\'DM Mono\',monospace">'+data.contratos.length+' contratos &middot; '+data.vendas.length+' vendas no mes</div></div>'
-      +'<div class="resp-total" style="color:'+color+'">'+data.contratos.length+'</div>'
-      +'</div><div class="resp-rows">';
+      +'<div class="resp-total" style="color:'+color+'">'+data.contratos.length+'</div></div><div class="resp-rows">';
     h+='<div class="resp-row" style="cursor:'+(data.contratos.length?'pointer':'default')+'" onclick="'+(data.contratos.length?'togInline(\''+uid+'-c\',\''+uid+'-c-arrow\')':'')+'">'
       +'<span class="resp-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span>'
-      +'<span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--blue)">'+data.contratos.length+'</span>'+(data.contratos.length?'<span id="'+uid+'-c-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>':'')+'</span>'
-      +'</div>';
-    if(data.contratos.length){
-      h+='<div id="'+uid+'-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">';
-      data.contratos.forEach(function(d){h+='<div class="resp-deal-item"><span class="resp-deal-name" title="'+(d.name||'')+'">'+( d.name||'--')+'</span><span class="resp-deal-date">'+(d.data_contrato_fmt||'--')+'</span></div>';});
-      h+='</div></div>';
-    }
+      +'<span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--blue)">'+data.contratos.length+'</span>'+(data.contratos.length?'<span id="'+uid+'-c-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>':'')+'</span></div>';
+    if(data.contratos.length){h+='<div id="'+uid+'-c" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">';data.contratos.forEach(function(d){h+='<div class="resp-deal-item"><span class="resp-deal-name" title="'+(d.name||'')+'">'+( d.name||'--')+'</span><span class="resp-deal-date">'+(d.data_contrato_fmt||'--')+'</span></div>';});h+='</div></div>';}
     h+='<div class="resp-row" style="cursor:'+(data.vendas.length?'pointer':'default')+'" onclick="'+(data.vendas.length?'togInline(\''+uid+'-v\',\''+uid+'-v-arrow\')':'')+'">'
       +'<span class="resp-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas</span>'
-      +'<span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--green)">'+data.vendas.length+'</span>'+(data.vendas.length?'<span id="'+uid+'-v-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>':'')+'</span>'
-      +'</div>';
-    if(data.vendas.length){
-      h+='<div id="'+uid+'-v" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">';
-      data.vendas.forEach(function(d){h+='<div class="resp-deal-item"><span class="resp-deal-name" title="'+(d.name||'')+'">'+( d.name||'--')+'</span><span class="resp-deal-date">'+fdate(d.closed_at)+'</span></div>';});
-      h+='</div></div>';
-    }
+      +'<span style="display:flex;align-items:center;gap:6px"><span class="resp-row-val" style="color:var(--green)">'+data.vendas.length+'</span>'+(data.vendas.length?'<span id="'+uid+'-v-arrow" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s">&#9654;</span>':'')+'</span></div>';
+    if(data.vendas.length){h+='<div id="'+uid+'-v" style="display:none;border-top:1px solid var(--border)"><div class="resp-deal-list">';data.vendas.forEach(function(d){h+='<div class="resp-deal-item"><span class="resp-deal-name" title="'+(d.name||'')+'">'+( d.name||'--')+'</span><span class="resp-deal-date">'+fdate(d.closed_at)+'</span></div>';});h+='</div></div>';}
     h+='<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--red)"></span>Perdas</span><span class="resp-row-val" style="color:var(--red)">'+data.perdas+'</span></div>'
     +'<div class="resp-row"><span class="resp-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Valor vendas no mes</span><span class="resp-row-val" style="color:var(--teal);font-size:12px">'+fmoney(data.valor)+'</span></div>'
     +'</div></div>';
   });
   h+='</div>';
-
-  // split RP x RRR
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
   h+='<div class="total-split">'
     +'<div class="total-funil-block"><div class="total-funil-title">Funil Comercial RP</div>'
@@ -941,18 +892,14 @@ function renderTotal(){
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Assinaturas</span><span class="total-row-val" style="color:var(--teal)">'+rpAssin+'</span></div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">'+rpV+'</span></div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento</span><span class="total-row-val" style="color:var(--blue)">'+rpA+'</span></div>'
-    +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div>'
-    +'</div>'
+    +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div></div>'
     +'<div class="total-funil-block"><div class="total-funil-title">Funil Comercial RRR Mae</div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Contratos enviados</span><span class="total-row-val" style="color:var(--blue)">'+rrrC+'</span></div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--teal)"></span>Assinaturas</span><span class="total-row-val" style="color:var(--teal)">'+rrrAssin+'</span></div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--green)"></span>Vendas fechadas</span><span class="total-row-val" style="color:var(--green)">'+rrrV+'</span></div>'
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento</span><span class="total-row-val" style="color:var(--blue)">'+rrrA+'</span></div>'
-    +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div>'
-    +'</div>'
+    +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div></div>'
     +'</div>';
-
-  // em andamento total
   const eaRP=(rp.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});
   const eaRRR=(rrr.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});
   const eaTot=eaRP.concat(eaRRR);
@@ -960,20 +907,13 @@ function renderTotal(){
   if(!eaTot.length){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma negociacao nessas etapas no mes</div>';}
   else{
     h+='<div class="stage-row" id="ea-total"><div class="stage-header" onclick="tog(\'ea-total\')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Desenvolvimento / Tem perfil - '+MN[selM]+'/'+selY+'</span><span class="stage-count" style="color:var(--blue)">'+eaTot.length+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Movido em</th></tr></thead><tbody>';
-    eaTot.forEach(function(d){
-      const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';
-      h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._f+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';
-    });
+    eaTot.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._f+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
     h+='</tbody></table></div></div>';
   }
-
-  // feed combinado
   const feedCombo=(rp.feed||[]).concat(rrr.feed||[]).sort(function(a,b){return b.ts.localeCompare(a.ts);});
   h+=renderFeed(feedCombo,20);
   h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
   h+=renderContratosPorDia((rp.contratos_mes||[]).concat(rrr.contratos_mes||[]),'total');
-
-  // perdas combinadas
   const todasPerdas=rp.perdas.concat(rrr.perdas);
   const mmapT={};todasPerdas.forEach(function(d){const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';mmapT[m]=(mmapT[m]||0)+1;});
   const msortedT=Object.entries(mmapT).sort(function(a,b){return b[1]-a[1];});
@@ -982,13 +922,9 @@ function renderTotal(){
   if(totP){
     const perdasComb=rp.perdas.map(function(d){return Object.assign({},d,{_funil:'RP'});}).concat(rrr.perdas.map(function(d){return Object.assign({},d,{_funil:'RRR'});}));
     h+='<div class="stage-row" id="perdas-total" style="margin-bottom:2rem"><div class="stage-header" onclick="tog(\'perdas-total\')"><div class="stage-color" style="background:var(--red)"></div><span class="stage-name">Negociacoes perdidas</span><span class="stage-count" style="color:var(--red)">'+totP+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Funil</th><th>Etapa</th><th>Motivo</th></tr></thead><tbody>';
-    perdasComb.forEach(function(d){
-      const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';
-      h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._funil+'</td><td class="dd">'+((d.deal_stage&&d.deal_stage.name)||'--')+'</td><td><span class="pill">'+m+'</span></td></tr>';
-    });
+    perdasComb.forEach(function(d){const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._funil+'</td><td class="dd">'+((d.deal_stage&&d.deal_stage.name)||'--')+'</td><td><span class="pill">'+m+'</span></td></tr>';});
     h+='</tbody></table></div></div>';
   }
-
   return h;
 }
 
@@ -996,17 +932,9 @@ function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
   const isMonday=new Date().getDay()===1;
   const d1Lbl=isMonday?'Sexta-feira':'Ontem';
   let d1=[],dHoje=[];
-  if(paneKey==='rp'){
-    d1=(rpD1||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});
-    dHoje=(rpHoje||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});
-  }else if(paneKey==='rrr'){
-    d1=(rrrD1||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});
-    dHoje=(rrrHoje||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});
-  }else{
-    d1=(rpD1||[]).map(function(d){return Object.assign({},d,{_f:'RP'});}).concat((rrrD1||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});}));
-    dHoje=(rpHoje||[]).map(function(d){return Object.assign({},d,{_f:'RP'});}).concat((rrrHoje||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});}));
-  }
-
+  if(paneKey==='rp'){d1=(rpD1||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});dHoje=(rpHoje||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});}
+  else if(paneKey==='rrr'){d1=(rrrD1||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});dHoje=(rrrHoje||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});}
+  else{d1=(rpD1||[]).map(function(d){return Object.assign({},d,{_f:'RP'});}).concat((rrrD1||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});}));dHoje=(rpHoje||[]).map(function(d){return Object.assign({},d,{_f:'RP'});}).concat((rrrHoje||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});}));}
   let h='<div class="d1-wrap"><div class="d1-hd"><span class="d1-title">&#9200; Contrato enviado - Acompanhamento diario</span><span class="d1-badge amber">D+1: '+d1.length+' sem assinatura</span><span class="d1-badge blue">Hoje: '+dHoje.length+' novos</span></div><div class="d1-section">';
   h+='<div class="d1-section-lbl" style="border-top:none;padding-top:0">D+1 - contrato em '+d1Lbl+', aguardando assinatura</div>';
   if(!d1.length){h+='<div class="d1-empty">Nenhum contrato sem assinatura no dia util anterior</div>';}
@@ -1030,14 +958,7 @@ function renderContratosPorDia(contratos,paneKey){
   const daysInMonth=new Date(selY,selM,0).getDate();
   const todayStr=selY+'-'+String(selM).padStart(2,'0')+'-'+String(new Date().getDate()).padStart(2,'0');
   const total=Object.values(byDay).reduce(function(a,b){return a+b;},0);
-  let h='<div class="stage-row" id="cpd-'+paneKey+'" style="margin-bottom:2rem">'
-    +'<div class="stage-header" onclick="tog(\'cpd-'+paneKey+'\')">'
-    +'<div class="stage-color" style="background:var(--blue)"></div>'
-    +'<span class="stage-name">Contratos enviados por dia - '+MN[selM]+'/'+selY+'</span>'
-    +'<span class="stage-count" style="color:var(--blue)">'+total+'</span>'
-    +'<span class="stage-arrow">&#9654;</span>'
-    +'</div>'
-    +'<div class="stage-deals"><table class="dt"><thead><tr><th>Dia</th><th>Contratos</th></tr></thead><tbody>';
+  let h='<div class="stage-row" id="cpd-'+paneKey+'" style="margin-bottom:2rem"><div class="stage-header" onclick="tog(\'cpd-'+paneKey+'\')"><div class="stage-color" style="background:var(--blue)"></div><span class="stage-name">Contratos enviados por dia - '+MN[selM]+'/'+selY+'</span><span class="stage-count" style="color:var(--blue)">'+total+'</span><span class="stage-arrow">&#9654;</span></div><div class="stage-deals"><table class="dt"><thead><tr><th>Dia</th><th>Contratos</th></tr></thead><tbody>';
   for(let d=1;d<=daysInMonth;d++){
     const key=selY+'-'+String(selM).padStart(2,'0')+'-'+String(d).padStart(2,'0');
     const qty=byDay[key]||0;
@@ -1061,6 +982,11 @@ loadAll();
 </body>
 </html>
 """
+
+
+# ── Servidor com suporte a multiplas conexoes simultaneas ─────────────────────
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1115,7 +1041,7 @@ if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
-    server = HTTPServer((HOST, PORT), Handler)
+    server = ThreadedHTTPServer((HOST, PORT), Handler)
     print("=" * 50)
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
