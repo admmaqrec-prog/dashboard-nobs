@@ -438,22 +438,36 @@ def load_funil_data(key, month, year):
     assinaturas_hoje_total  = len([d for d in assinaturas_mes
                                    if get_custom_date(d, "Data da assinatura") == today_str])
 
+    # ALTERACAO 1: assinaturas do mes cujo contrato foi feito no mesmo mes
+    assinaturas_contrato_mes = len([
+        d for d in assinaturas_mes
+        if custom_date_in_month(d, "Data do contrato", month, year)
+    ])
+
+    # ALTERACAO 2: vendas do mes cujo contrato foi feito no mesmo mes
+    vendas_contrato_mes = len([
+        d for d in vendas_mes
+        if custom_date_in_month(d, "Data do contrato", month, year)
+    ])
+
     return {
-        "etapas":               [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
-        "vendas":               [slim(d) for d in vendas_mes],
-        "contratos_mes":        [slim(d) for d in contratos_mes],
-        "em_andamento":         [slim(d) for d in em_andamento],
-        "perdas":               [slim(d) for d in todas_perdas],
-        "feed":                 feed_candidates[:60],
-        "vendas_busca_paga":    len(vendas_busca_paga),
-        "contratos_busca_paga": len(contratos_busca_paga),
-        "assinaturas_mes":      [slim(d) for d in assinaturas_mes],
-        "contrato_d1":          contrato_d1,
-        "contrato_hoje":        contrato_hoje,
-        "prfb_ativos":          len(prfb_ativos),
-        "vendas_hoje_total":      vendas_hoje_total,
-        "contratos_hoje_total":   contratos_hoje_total,
-        "assinaturas_hoje_total": assinaturas_hoje_total,
+        "etapas":                   [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
+        "vendas":                   [slim(d) for d in vendas_mes],
+        "contratos_mes":            [slim(d) for d in contratos_mes],
+        "em_andamento":             [slim(d) for d in em_andamento],
+        "perdas":                   [slim(d) for d in todas_perdas],
+        "feed":                     feed_candidates[:60],
+        "vendas_busca_paga":        len(vendas_busca_paga),
+        "contratos_busca_paga":     len(contratos_busca_paga),
+        "assinaturas_mes":          [slim(d) for d in assinaturas_mes],
+        "contrato_d1":              contrato_d1,
+        "contrato_hoje":            contrato_hoje,
+        "prfb_ativos":              len(prfb_ativos),
+        "vendas_hoje_total":        vendas_hoje_total,
+        "contratos_hoje_total":     contratos_hoje_total,
+        "assinaturas_hoje_total":   assinaturas_hoje_total,
+        "assinaturas_contrato_mes": assinaturas_contrato_mes,   # NOVO
+        "vendas_contrato_mes":      vendas_contrato_mes,        # NOVO
     }
 
 
@@ -746,9 +760,10 @@ function renderPane(key){
     +'</div>';
 
   if(key==='rp'){
+    // ALTERACAO 3: Contratos por midia social ANTES de vendas por midia social
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">'
-      +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+(s.vendas_busca_paga||0)+'</div><div class="sc-sub">origem "busca" no mes</div></div>'
       +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+(s.contratos_busca_paga||0)+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
+      +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+(s.vendas_busca_paga||0)+'</div><div class="sc-sub">origem "busca" no mes</div></div>'
       +'</div>';
   }
 
@@ -822,6 +837,12 @@ function hojeTag(n,color,borderColor,bgColor){
   return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#9679; '+n+' hoje</div>';
 }
 
+// ALTERACAO 1+2: card de "contrato no mes" para assinaturas e vendas
+function contratoMesTag(n,color,borderColor,bgColor){
+  if(!n&&n!==0)return'';
+  return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#128196; '+n+' c/ contrato no mes</div>';
+}
+
 function renderTotal(){
   const rp=STATE.rp,rrr=STATE.rrr;if(!rp||!rrr)return'';
   const rpV=rp.vendas.length,rrrV=rrr.vendas.length,totV=rpV+rrrV;
@@ -832,19 +853,29 @@ function renderTotal(){
   const totPRFB=(rp.prfb_ativos||0)+(rrr.prfb_ativos||0);
   const p=calcProj(totV,selM,selY);const proj=p.proj,wdT=p.wdT,wdD=p.wdD,ritmo=p.ritmo;
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
-  const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
+  // ALTERACAO 3: contratos por midia social ANTES de vendas
   const totBuscaPagaC=(rp.contratos_busca_paga||0)+(rrr.contratos_busca_paga||0);
+  const totBuscaPagaV=(rp.vendas_busca_paga||0)+(rrr.vendas_busca_paga||0);
   const contratosHoje=(rp.contratos_hoje_total||0)+(rrr.contratos_hoje_total||0);
   const assinHoje=(rp.assinaturas_hoje_total||0)+(rrr.assinaturas_hoje_total||0);
   const vendasHoje=(rp.vendas_hoje_total||0)+(rrr.vendas_hoje_total||0);
+  // ALTERACAO 1: assinaturas com contrato no mes (ambos funis)
+  const totAssinContratoMes=(rp.assinaturas_contrato_mes||0)+(rrr.assinaturas_contrato_mes||0);
+  // ALTERACAO 2: vendas com contrato no mes (ambos funis)
+  const totVendasContratoMes=(rp.vendas_contrato_mes||0)+(rrr.vendas_contrato_mes||0);
+
   let h='<div class="total-hero">'
+    // Card Contratos - sem alteracao
     +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div>'+hojeTag(contratosHoje,'var(--blue)','rgba(79,143,255,.35)','rgba(79,143,255,.1)')+'</div>'
-    +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
-    +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div>'+hojeTag(vendasHoje,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+'</div>'
+    // ALTERACAO 1: Card Assinaturas com novo badge "c/ contrato no mes" antes do "hoje"
+    +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+contratoMesTag(totAssinContratoMes,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
+    // ALTERACAO 2: Card Vendas com novo badge "c/ contrato no mes" antes do "hoje"
+    +'<div class="summary-card green hero"><div class="sc-label">Vendas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val green">'+totV+'</div><div class="sc-sub">RP: '+rpV+' &nbsp;&middot;&nbsp; RRR: '+rrrV+'</div>'+contratoMesTag(totVendasContratoMes,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+hojeTag(vendasHoje,'var(--green)','rgba(62,207,142,.35)','rgba(62,207,142,.1)')+'</div>'
     +'</div>'
+    // ALTERACAO 3: Contratos por midia social ANTES de vendas por midia social
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">'
-    +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
     +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+totBuscaPagaC+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
+    +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+totBuscaPagaV+'</div><div class="sc-sub">ambos funis &middot; origem "busca"</div></div>'
     +'</div>'
     +'<div class="total-secondary">'
     +'<div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">'+totA+'</div><div class="sc-sub">Desenv. / Tem perfil no mes</div></div>'
@@ -1031,7 +1062,8 @@ class Handler(BaseHTTPRequestHandler):
                     "feed": [], "vendas_busca_paga": 0, "contratos_busca_paga": 0,
                     "assinaturas_mes": [], "contrato_d1": [], "contrato_hoje": [],
                     "prfb_ativos": 0,
-                    "vendas_hoje_total": 0, "contratos_hoje_total": 0, "assinaturas_hoje_total": 0}, 500)
+                    "vendas_hoje_total": 0, "contratos_hoje_total": 0, "assinaturas_hoje_total": 0,
+                    "assinaturas_contrato_mes": 0, "vendas_contrato_mes": 0}, 500)
         else:
             self.send_response(404)
             self.end_headers()
