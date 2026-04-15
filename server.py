@@ -1113,7 +1113,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     import os
-    PORT = int(os.environ.get("PORT", 10000))
+    PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
     server = HTTPServer((HOST, PORT), Handler)
     print("=" * 50)
