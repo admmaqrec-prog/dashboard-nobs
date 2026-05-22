@@ -15,6 +15,44 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 TOKEN = "68c30c8a73e14f0019be70b1"
 BASE  = "https://crm.rdstation.com/api/v1"
 
+# ── Fuso horario Brasilia (BRT/UTC-3) ────────────────────────────────────────
+BR_TZ = datetime.timezone(datetime.timedelta(hours=-3))
+
+def now_br():
+    """Retorna datetime atual em BRT."""
+    return datetime.datetime.now(BR_TZ)
+
+def today_br():
+    """Retorna date atual em BRT."""
+    return now_br().date()
+
+def iso_to_br_date_str(iso_val):
+    """Converte uma string ISO (com ou sem timezone) para a data YYYY-MM-DD em BRT.
+    Usado para campos como closed_at, updated_at, created_at que vem do RD em UTC."""
+    if not iso_val:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(iso_val.replace("Z", "+00:00"))
+        # Se vier sem timezone, assumir UTC (padrao da API do RD)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return str(dt.astimezone(BR_TZ).date())
+    except Exception:
+        return iso_val[:10]
+
+def iso_to_br_dt(iso_val):
+    """Converte uma string ISO para datetime em BRT. Retorna None se invalido."""
+    if not iso_val:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(iso_val.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(BR_TZ)
+    except Exception:
+        return None
+
+
 FUNIS = {
     "rp": {
         "id":   "68a714f1b3f7b8001c750c18",
@@ -137,7 +175,8 @@ def parse_dt(val):
         return None
 
 def in_month(deal, month, year, field="updated_at"):
-    dt = parse_dt(deal.get(field) or "")
+    """Verifica se a data ISO do campo (closed_at, updated_at, etc) esta no mes/ano em BRT."""
+    dt = iso_to_br_dt(deal.get(field) or "")
     if not dt:
         return False
     return dt.month == month and dt.year == year
@@ -175,6 +214,8 @@ def is_busca_paga(deal):
     return origem.startswith("busca paga") or fonte.startswith("busca paga")
 
 def get_custom_date(deal, label_substring):
+    """Le um campo customizado de data (formato DD/MM/YYYY no RD) e retorna YYYY-MM-DD.
+    Esses campos sao preenchidos manualmente em horario BRT, entao nao precisam de conversao."""
     for cf in (deal.get("deal_custom_fields") or []):
         lbl = (cf.get("custom_field") or {}).get("label", "")
         if label_substring.lower() in lbl.lower():
@@ -270,6 +311,7 @@ def load_funil_data(key, month, year):
             mes_active = [d for d in all_active if in_month(d, month, year, "updated_at")]
         etapas_data.append({**e, "deals": mes_active})
 
+    # Vendas: usa closed_at convertido para BRT
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
 
@@ -374,7 +416,8 @@ def load_funil_data(key, month, year):
         }
         return out
 
-    today = datetime.date.today()
+    # ── CORRECAO: hoje em BRT, nao UTC ───────────────────────────────────────
+    today = today_br()
     weekday = today.weekday()
     if weekday == 0:
         prev_wd = today - datetime.timedelta(days=3)
@@ -416,7 +459,7 @@ def load_funil_data(key, month, year):
         and not get_custom_date(d, "Data da assinatura")
     ]
 
-    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} d1={len(contrato_d1)} hoje={len(contrato_hoje)}")
+    print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} (BRT) d1={len(contrato_d1)} hoje={len(contrato_hoje)}")
     print(f"   [DEBUG CONTRATOS] mes={len(contratos_mes)} pool={len(all_deals_pool)}")
     print(f"   [DEBUG EM_ANDAMENTO] pre_contrato={len(em_andamento)} etapas={list(pre_contrato_map.keys())}")
 
@@ -431,12 +474,17 @@ def load_funil_data(key, month, year):
         except Exception:
             prfb_ativos = []
 
+    # ── CORRECAO: vendas_hoje_total usa closed_at convertido para BRT ────────
     vendas_hoje_total       = len([d for d in vendas_mes
-                                   if (d.get("closed_at") or "")[:10] == today_str])
+                                   if iso_to_br_date_str(d.get("closed_at") or "") == today_str])
+    # Estas duas ja usam get_custom_date (que ja esta em BRT), mas comparavam com
+    # today_str em UTC. Agora today_str ja esta em BRT, entao funcionam.
     contratos_hoje_total    = len([d for d in contratos_mes
                                    if get_custom_date(d, "Data do contrato") == today_str])
     assinaturas_hoje_total  = len([d for d in assinaturas_mes
                                    if get_custom_date(d, "Data da assinatura") == today_str])
+
+    print(f"   [DEBUG HOJE] today_str={today_str} (BRT) vendas_hoje={vendas_hoje_total} contratos_hoje={contratos_hoje_total} assin_hoje={assinaturas_hoje_total}")
 
     assinaturas_contrato_mes = len([
         d for d in assinaturas_mes
@@ -1092,11 +1140,12 @@ class Handler(BaseHTTPRequestHandler):
 
         elif parsed.path == "/api/data":
             key   = qs.get("funil", "rp")
-            now   = datetime.datetime.now()
+            # Usa now_br() para que mes/ano default sejam BRT, nao UTC
+            now   = now_br()
             month = int(qs.get("month", now.month))
             year  = int(qs.get("year",  now.year))
             try:
-                print(f"\n-> Buscando {key.upper()} -- {month}/{year}")
+                print(f"\n-> Buscando {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()})")
                 data = load_funil_data(key, month, year)
                 self.send_json(data)
                 print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  d1={len(data['contrato_d1'])}  hoje={len(data['contrato_hoje'])}")
@@ -1123,6 +1172,8 @@ if __name__ == "__main__":
     print("  Dashboard Comercial -- RD Station CRM")
     print("=" * 50)
     print(f"\n  Acesse: http://{HOST}:{PORT}")
+    print(f"  Fuso usado para 'hoje': BRT (UTC-3)")
+    print(f"  Server BRT now: {now_br().isoformat()}")
     print("  Pressione Ctrl+C para parar\n")
     try:
         server.serve_forever()
