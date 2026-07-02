@@ -11,21 +11,16 @@ import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 TOKEN = "68c30c8a73e14f0019be70b1"
 BASE  = "https://crm.rdstation.com/api/v1"
-
 # ── Fuso horario Brasilia (BRT/UTC-3) ────────────────────────────────────────
 BR_TZ = datetime.timezone(datetime.timedelta(hours=-3))
-
 def now_br():
     """Retorna datetime atual em BRT."""
     return datetime.datetime.now(BR_TZ)
-
 def today_br():
     """Retorna date atual em BRT."""
     return now_br().date()
-
 def iso_to_br_date_str(iso_val):
     """Converte uma string ISO (com ou sem timezone) para a data YYYY-MM-DD em BRT.
     Usado para campos como closed_at, updated_at, created_at que vem do RD em UTC."""
@@ -39,7 +34,6 @@ def iso_to_br_date_str(iso_val):
         return str(dt.astimezone(BR_TZ).date())
     except Exception:
         return iso_val[:10]
-
 def iso_to_br_dt(iso_val):
     """Converte uma string ISO para datetime em BRT. Retorna None se invalido."""
     if not iso_val:
@@ -51,8 +45,6 @@ def iso_to_br_dt(iso_val):
         return dt.astimezone(BR_TZ)
     except Exception:
         return None
-
-
 FUNIS = {
     "rp": {
         "id":   "68a714f1b3f7b8001c750c18",
@@ -91,7 +83,6 @@ FUNIS = {
         "pre_contrato_nomes": ["desenvolvimento", "tem perfil"],
     }
 }
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 def rd_get(path, retries=2):
     sep = "&" if "?" in path else "?"
@@ -107,7 +98,6 @@ def rd_get(path, retries=2):
             if attempt < retries:
                 import time; time.sleep(1)
     raise last_err
-
 def fetch_all(pipeline_id, stage_id, extra=""):
     deals, page = [], 1
     while True:
@@ -118,14 +108,12 @@ def fetch_all(pipeline_id, stage_id, extra=""):
             break
         page += 1
     return deals
-
 def fetch_pipeline_stages(pipeline_id):
     try:
         d = rd_get(f"/deal_pipelines/{pipeline_id}")
         return d.get("deal_stages") or []
     except Exception:
         return []
-
 def fetch_deals_by_stage_name(pipeline_id, stage_name_lower):
     stages = fetch_pipeline_stages(pipeline_id)
     for s in stages:
@@ -156,16 +144,12 @@ def fetch_deals_by_stage_name(pipeline_id, stage_name_lower):
     except Exception as e:
         print(f"   [EA FALLBACK ERRO] {e}")
         return None, []
-
 def fetch_stage_active(pipeline_id, stage_id):
     return [x for x in fetch_all(pipeline_id, stage_id) if x.get("win") is None]
-
 def fetch_ok_stage(pipeline_id, stage_id):
     return fetch_all(pipeline_id, stage_id)
-
 def fetch_lost_stage(pipeline_id, stage_id):
     return fetch_all(pipeline_id, stage_id, "&win=false")
-
 def parse_dt(val):
     if not val:
         return None
@@ -173,27 +157,23 @@ def parse_dt(val):
         return datetime.datetime.fromisoformat(val.replace("Z", "+00:00"))
     except Exception:
         return None
-
 def in_month(deal, month, year, field="updated_at"):
     """Verifica se a data ISO do campo (closed_at, updated_at, etc) esta no mes/ano em BRT."""
     dt = iso_to_br_dt(deal.get(field) or "")
     if not dt:
         return False
     return dt.month == month and dt.year == year
-
 def user_name(deal):
     u = deal.get("user")
     if isinstance(u, dict):
         return u.get("name") or "desconhecido"
     return u or "desconhecido"
-
 def get_origem(deal):
     for cf in (deal.get("deal_custom_fields") or []):
         lbl = (cf.get("custom_field") or {}).get("label", "")
         if "origem" in lbl.lower():
             return (cf.get("value") or "").strip()
     return ""
-
 def get_fonte(deal):
     for key in ("fonte", "source"):
         v = (deal.get(key) or "").strip()
@@ -207,12 +187,10 @@ def get_fonte(deal):
         if "fonte" in lbl.lower():
             return (cf.get("value") or "").strip()
     return ""
-
 def is_busca_paga(deal):
     origem = get_origem(deal).lower()
     fonte  = get_fonte(deal).lower()
     return origem.startswith("busca paga") or fonte.startswith("busca paga")
-
 def get_custom_date(deal, label_substring):
     """Le um campo customizado de data (formato DD/MM/YYYY no RD) e retorna YYYY-MM-DD.
     Esses campos sao preenchidos manualmente em horario BRT, entao nao precisam de conversao."""
@@ -227,7 +205,6 @@ def get_custom_date(deal, label_substring):
                 return f"{yr}-{mon}-{day}"
             return val[:10]
     return ""
-
 def fmt_custom_date(iso_date):
     if not iso_date or len(iso_date) < 10:
         return iso_date or "--"
@@ -236,7 +213,6 @@ def fmt_custom_date(iso_date):
         return f"{day}/{mon}/{yr}"
     except Exception:
         return iso_date
-
 def custom_date_in_month(deal, label_substring, month, year):
     val = get_custom_date(deal, label_substring)
     if not val:
@@ -246,18 +222,15 @@ def custom_date_in_month(deal, label_substring, month, year):
         return dt.month == month and dt.year == year
     except Exception:
         return False
-
 def custom_date_equals(deal, label_substring, date_str):
     val = get_custom_date(deal, label_substring)
     if not val:
         return False
     return val == date_str
-
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
     funil = FUNIS[key]
     pid   = funil["id"]
-
     tasks = {}
     with ThreadPoolExecutor(max_workers=20) as ex:
         for e in funil["etapas"]:
@@ -270,13 +243,11 @@ def load_funil_data(key, month, year):
             tasks[ex.submit(fetch_all, pid, sid)] = ("postcontrato_all", sid)
         for nome_lower in funil.get("pre_contrato_nomes", []):
             tasks[ex.submit(fetch_deals_by_stage_name, pid, nome_lower)] = ("pre_contrato", nome_lower)
-
     etapas_map        = {e["id"]: {**e, "deals": []} for e in funil["etapas"]}
     ok_deals          = []
     todas_perdas      = []
     postcontrato_pool = {}
     pre_contrato_map  = {}
-
     for fut in as_completed(tasks, timeout=160):
         kind, meta = tasks[fut]
         try:
@@ -299,7 +270,6 @@ def load_funil_data(key, month, year):
             nome_lower = meta
             sid_result, deals_result = result
             pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
-
     assin_stage_id = funil.get("assin_stage_id", "")
     etapas_data = []
     for e in funil["etapas"]:
@@ -310,18 +280,15 @@ def load_funil_data(key, month, year):
         else:
             mes_active = [d for d in all_active if in_month(d, month, year, "updated_at")]
         etapas_data.append({**e, "deals": mes_active})
-
     # Vendas: usa closed_at convertido para BRT
     vendas_mes = [d for d in ok_deals
                   if d.get("closed_at") and in_month(d, month, year, "closed_at")]
-
     seen_contrato = set()
     contratos_mes = []
     all_postcontrato_deals = []
     for sid, deals in postcontrato_pool.items():
         all_postcontrato_deals.extend(deals)
     all_postcontrato_deals.extend(ok_deals)
-
     for d in all_postcontrato_deals:
         if not custom_date_in_month(d, "Data do contrato", month, year):
             continue
@@ -329,7 +296,6 @@ def load_funil_data(key, month, year):
         if did and did not in seen_contrato:
             seen_contrato.add(did)
             contratos_mes.append(d)
-
     em_andamento = []
     seen_ea = set()
     for nome_lower, info in pre_contrato_map.items():
@@ -345,7 +311,6 @@ def load_funil_data(key, month, year):
                 seen_ea.add(did)
                 stage_name = (d.get("deal_stage") or {}).get("name") or nome_lower
                 em_andamento.append({**d, "_pre_stage": stage_name})
-
     seen_assin = set()
     assinaturas_mes = []
     for d in all_postcontrato_deals:
@@ -355,10 +320,8 @@ def load_funil_data(key, month, year):
         if did and did not in seen_assin:
             seen_assin.add(did)
             assinaturas_mes.append(d)
-
     vendas_busca_paga    = [d for d in vendas_mes if is_busca_paga(d)]
     contratos_busca_paga = [d for d in contratos_mes if is_busca_paga(d)]
-
     feed_candidates = []
     for e in etapas_data:
         for d in e["deals"]:
@@ -395,7 +358,6 @@ def load_funil_data(key, month, year):
             "funil": funil["nome"],
         })
     feed_candidates.sort(key=lambda x: x["ts"], reverse=True)
-
     def slim(d, extra_fields=None):
         ds = d.get("deal_stage")
         dlr = d.get("deal_lost_reason")
@@ -415,7 +377,6 @@ def load_funil_data(key, month, year):
             "data_assinatura_fmt":fmt_custom_date(get_custom_date(d, "Data da assinatura")),
         }
         return out
-
     # ── CORRECAO: hoje em BRT, nao UTC ───────────────────────────────────────
     today = today_br()
     weekday = today.weekday()
@@ -425,10 +386,8 @@ def load_funil_data(key, month, year):
         prev_wd = today - datetime.timedelta(days=2)
     else:
         prev_wd = today - datetime.timedelta(days=1)
-
     prev_wd_str = str(prev_wd)
     today_str   = str(today)
-
     def slim_d1(d):
         dc = get_custom_date(d, "Data do contrato")
         da = get_custom_date(d, "Data da assinatura")
@@ -442,12 +401,10 @@ def load_funil_data(key, month, year):
             "current_stage":       (d.get("deal_stage") or {}).get("name") or "",
             "updated_at":          d.get("updated_at") or "",
         }
-
     all_deals_pool = list({
         (d.get("_id") or d.get("id")): d
         for d in all_postcontrato_deals
     }.values())
-
     contrato_d1 = [
         slim_d1(d) for d in all_deals_pool
         if custom_date_equals(d, "Data do contrato", prev_wd_str)
@@ -458,11 +415,9 @@ def load_funil_data(key, month, year):
         if custom_date_equals(d, "Data do contrato", today_str)
         and not get_custom_date(d, "Data da assinatura")
     ]
-
     print(f"   [DEBUG D1] prev_wd={prev_wd_str} hoje={today_str} (BRT) d1={len(contrato_d1)} hoje={len(contrato_hoje)}")
     print(f"   [DEBUG CONTRATOS] mes={len(contratos_mes)} pool={len(all_deals_pool)}")
     print(f"   [DEBUG EM_ANDAMENTO] pre_contrato={len(em_andamento)} etapas={list(pre_contrato_map.keys())}")
-
     prfb_stage_id = funil.get("prfb_stage_id", "")
     prfb_ativos = []
     if prfb_stage_id and prfb_stage_id in etapas_map:
@@ -473,7 +428,6 @@ def load_funil_data(key, month, year):
             prfb_ativos = fetch_stage_active(pid, prfb_stage_id)
         except Exception:
             prfb_ativos = []
-
     # ── CORRECAO: vendas_hoje_total usa closed_at convertido para BRT ────────
     vendas_hoje_total       = len([d for d in vendas_mes
                                    if iso_to_br_date_str(d.get("closed_at") or "") == today_str])
@@ -483,19 +437,15 @@ def load_funil_data(key, month, year):
                                    if get_custom_date(d, "Data do contrato") == today_str])
     assinaturas_hoje_total  = len([d for d in assinaturas_mes
                                    if get_custom_date(d, "Data da assinatura") == today_str])
-
     print(f"   [DEBUG HOJE] today_str={today_str} (BRT) vendas_hoje={vendas_hoje_total} contratos_hoje={contratos_hoje_total} assin_hoje={assinaturas_hoje_total}")
-
     assinaturas_contrato_mes = len([
         d for d in assinaturas_mes
         if custom_date_in_month(d, "Data do contrato", month, year)
     ])
-
     vendas_contrato_mes = len([
         d for d in vendas_mes
         if custom_date_in_month(d, "Data do contrato", month, year)
     ])
-
     return {
         "etapas":                   [{**e, "deals": [slim(d) for d in e["deals"]]} for e in etapas_data],
         "vendas":                   [slim(d) for d in vendas_mes],
@@ -515,8 +465,6 @@ def load_funil_data(key, month, year):
         "assinaturas_contrato_mes": assinaturas_contrato_mes,
         "vendas_contrato_mes":      vendas_contrato_mes,
     }
-
-
 # ── HTML ──────────────────────────────────────────────────────────────────────
 HTML = r"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -692,17 +640,14 @@ let curF='total';
 const MN=['','Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 const COLORS=['#4f8fff','#a78bfa','#3ecf8e','#f0a830','#fb923c','#2dd4bf','#f06060'];
 const EXCLUDED=new Set(['Felipe Fernando','Luciano Santana']);
-
 function toggleTheme(){
   const isLight=document.documentElement.classList.toggle('light');
-  document.getElementById('tbtn').textContent=isLight?'\uD83C\uDF11':'\uD83C\uDF19';
+  document.getElementById('tbtn').textContent=isLight?'🌑':'🌙';
   localStorage.setItem('theme',isLight?'light':'dark');
 }
-(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');document.getElementById('tbtn').textContent='\uD83C\uDF11';}})();
-
+(function(){if(localStorage.getItem('theme')==='light'){document.documentElement.classList.add('light');document.getElementById('tbtn').textContent='🌑';}})();
 function workdaysInMonth(m,y){const days=new Date(y,m,0).getDate();let w=0;for(let d=1;d<=days;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
 function workdaysUntilToday(m,y){const today=new Date();const isCurrent=(today.getMonth()+1===m&&today.getFullYear()===y);const last=isCurrent?today.getDate():new Date(y,m,0).getDate();let w=0;for(let d=1;d<=last;d++){const dw=new Date(y,m-1,d).getDay();if(dw>0&&dw<6)w++;}return w;}
-
 let nextRefreshAt=null;
 function startCountdown(){nextRefreshAt=Date.now()+60*60*1000;}
 function tickCountdown(){
@@ -711,9 +656,7 @@ function tickCountdown(){
   const h=Math.floor(diff/3600),m=Math.floor((diff%3600)/60),s=diff%60;
   document.getElementById('nr').textContent='proximo em '+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
-
 function setLoad(p,t){document.getElementById('lf').style.width=p+'%';document.getElementById('lt').textContent=t;}
-
 async function loadAll(){
   document.getElementById('rbtn').querySelector('#rspin').className='spin';
   document.getElementById('sdot').style.cssText='width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)';
@@ -748,7 +691,6 @@ async function loadAll(){
   }
   document.getElementById('rbtn').querySelector('#rspin').className='';
 }
-
 function uname(d){return d.user||'--';}
 function fdate(iso){if(!iso)return'--';const d=new Date(iso);return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');}
 function ftime(iso){
@@ -763,13 +705,11 @@ function calcProj(v,m,y){
   if(!wdD)return{proj:0,wdT,wdD,ritmo:'0.00'};
   const r=v/wdD;return{proj:Math.round(r*wdT),wdT,wdD,ritmo:r.toFixed(2)};
 }
-
 function renderAll(){
   document.getElementById('pane-rp').innerHTML=renderPane('rp');
   document.getElementById('pane-rrr').innerHTML=renderPane('rrr');
   document.getElementById('pane-total').innerHTML=renderTotal();
 }
-
 // ── renderFeed: colapsavel, fechado por padrao ─────────────────────────────
 function renderFeed(feed,limit,feedId){
   const items=(feed||[]).slice(0,limit);
@@ -799,7 +739,6 @@ function renderFeed(feed,limit,feedId){
   h+='</div></div>';
   return h;
 }
-
 function renderPane(key){
   const s=STATE[key];if(!s)return'';
   const totAtivo=(s.em_andamento||[]).length;
@@ -808,7 +747,6 @@ function renderPane(key){
   const pct=Math.min(100,Math.round((totV/Math.max(proj,1))*100));
   const mmap={};s.perdas.forEach(function(d){const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';mmap[m]=(mmap[m]||0)+1;});
   const msorted=Object.entries(mmap).sort(function(a,b){return b[1]-a[1];});
-
   let h='<div class="summary-grid-5">'
     +'<div class="summary-card blue"><div class="sc-label">Em andamento</div><div class="sc-val blue">'+totAtivo+'</div><div class="sc-sub">movidos no mes · Desenv. / Tem perfil</div></div>'
     +'<div class="summary-card blue"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">campo Data do contrato</div></div>'
@@ -817,18 +755,15 @@ function renderPane(key){
     +'<div class="summary-card amber"><div class="sc-label">Projecao do mes</div><div class="sc-val amber">'+proj+'</div><div class="sc-sub">'+ritmo+'/dia - '+wdT+' dias uteis<div class="proj-bar-wrap"><div class="proj-bar" style="width:'+pct+'%;background:var(--amber)"></div></div></div></div>'
     +'<div class="summary-card red"><div class="sc-label">Perdas</div><div class="sc-val red">'+totP+'</div><div class="sc-sub">historico total</div></div>'
     +'</div>';
-
   if(key==='rp'){
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:2rem">'
       +'<div class="summary-card purple"><div class="sc-label">Contratos por midia social</div><div class="sc-val purple">'+(s.contratos_busca_paga||0)+'</div><div class="sc-sub">contratos enviados via busca</div></div>'
       +'<div class="summary-card purple"><div class="sc-label">Vendas por midia social</div><div class="sc-val purple">'+(s.vendas_busca_paga||0)+'</div><div class="sc-sub">origem "busca" no mes</div></div>'
       +'</div>';
   }
-
   h+='<div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">'
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:24px">'+fmoney(s.vendas.reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas no mes</div></div>'
     +'</div>';
-
   const umap={};
   s.etapas.forEach(function(e){e.deals.forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].et[e.nome]=(umap[u].et[e.nome]||0)+1;});});
   (s.em_andamento||[]).forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].ativo++;});
@@ -836,7 +771,6 @@ function renderPane(key){
   if(s.contratos_mes)s.contratos_mes.forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].contratos.push(d);});
   s.perdas.forEach(function(d){const u=uname(d);if(!umap[u])umap[u]={ativo:0,et:{},vendas:[],contratos:[],perdas:0,valor:0};umap[u].perdas++;});
   const users=Object.entries(umap).filter(function(e){return !EXCLUDED.has(e[0]);}).sort(function(a,b){return b[1].contratos.length-a[1].contratos.length||b[1].vendas.length-a[1].vendas.length;});
-
   h+='<div class="section-hd"><h3>Por responsavel</h3><span class="cnt blue">'+users.length+' vendedores</span><div class="section-line"></div></div><div class="resp-grid">';
   users.forEach(function(entry,i){
     const name=entry[0],data=entry[1];
@@ -856,7 +790,6 @@ function renderPane(key){
     +'</div></div>';
   });
   h+='</div>';
-
   // ── Etapas pos-contrato ──
   h+='<div class="section-hd"><h3>Negociacoes por etapa (pos-contrato)</h3><span class="cnt blue">'+s.etapas.reduce(function(a,e){return a+e.deals.length;},0)+' ativas</span><div class="section-line"></div></div><div class="stages-wrap">';
   s.etapas.forEach(function(e,ei){
@@ -866,20 +799,16 @@ function renderPane(key){
     else{h+='<table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Atualizado</th></tr></thead><tbody>';e.deals.forEach(function(d){h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});h+='</tbody></table>';}
     h+='</div></div>';
   });h+='</div>';
-
   // ── Contratos enviados ──
   h+='<div class="section-hd"><h3>Contratos enviados - '+MN[selM]+'/'+selY+'</h3><span class="cnt blue">'+totC+' total</span><div class="section-line"></div></div>';
   if(!totC){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhum contrato neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(79,143,255,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Data</th></tr></thead><tbody>';s.contratos_mes.forEach(function(d){h+='<tr><td class="dn" style="color:var(--blue)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+(d.data_contrato_fmt||'--')+'</td></tr>';});h+='</tbody></table></div>';}
-
   // ── Vendas fechadas ──
   h+='<div class="section-hd"><h3>Vendas fechadas - '+MN[selM]+'/'+selY+'</h3><span class="cnt green">'+totV+' total</span><div class="section-line"></div></div>';
   if(!totV){h+='<div class="empty" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:2rem">Nenhuma venda neste periodo</div>';}
   else{h+='<div class="tw" style="border-color:rgba(62,207,142,.2);margin-bottom:2rem"><table class="dt"><thead><tr><th>Negociacao</th><th>Responsavel</th><th>Fechado em</th></tr></thead><tbody>';s.vendas.forEach(function(d){h+='<tr><td class="dn" style="color:var(--green)">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+fdate(d.closed_at)+'</td></tr>';});h+='</tbody></table></div>';}
-
   // ── Contratos por dia ──
   h+=renderContratosPorDia(s.contratos_mes,key);
-
   // ── Em andamento (DEPOIS de contratos por dia) ──
   const eaList=s.em_andamento||[];
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Em andamento - Desenvolvimento / Tem perfil</h3><span class="cnt blue">'+eaList.length+' negociacoes</span><div class="section-line"></div></div>';
@@ -889,10 +818,8 @@ function renderPane(key){
     eaList.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
     h+='</tbody></table></div></div>';
   }
-
   // ── Feed (DEPOIS de em andamento, fechado por padrao) ──
   h+=renderFeed(s.feed,15,'feed-'+key);
-
   // ── Perdas ──
   h+='<div class="section-hd" style="margin-top:2rem"><h3>Perdas nas etapas finais</h3><span class="cnt red">'+totP+' total</span><div class="section-line"></div></div>';
   h+='<div class="motivos-grid">'+msorted.map(function(e){return '<div class="mc"><span class="mc-n">'+e[0]+'</span><span class="mc-v">'+e[1]+'</span></div>';}).join('')+'</div>';
@@ -903,17 +830,14 @@ function renderPane(key){
   }
   return h;
 }
-
 function hojeTag(n,color,borderColor,bgColor){
   if(!n&&n!==0)return'';
   return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#9679; '+n+' hoje</div>';
 }
-
 function contratoMesTag(n,color,borderColor,bgColor){
   if(!n&&n!==0)return'';
   return '<div class="sc-hoje" style="color:'+color+';border-color:'+borderColor+';background:'+bgColor+'">&#128196; '+n+' c/ contrato no mes</div>';
 }
-
 function renderTotal(){
   const rp=STATE.rp,rrr=STATE.rrr;if(!rp||!rrr)return'';
   const rpV=rp.vendas.length,rrrV=rrr.vendas.length,totV=rpV+rrrV;
@@ -931,7 +855,6 @@ function renderTotal(){
   const vendasHoje=(rp.vendas_hoje_total||0)+(rrr.vendas_hoje_total||0);
   const totAssinContratoMes=(rp.assinaturas_contrato_mes||0)+(rrr.assinaturas_contrato_mes||0);
   const totVendasContratoMes=(rp.vendas_contrato_mes||0)+(rrr.vendas_contrato_mes||0);
-
   let h='<div class="total-hero">'
     +'<div class="summary-card blue hero"><div class="sc-label">Contratos enviados - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val blue">'+totC+'</div><div class="sc-sub">RP: '+rpC+' &nbsp;&middot;&nbsp; RRR: '+rrrC+'</div>'+hojeTag(contratosHoje,'var(--blue)','rgba(79,143,255,.35)','rgba(79,143,255,.1)')+'</div>'
     +'<div class="summary-card teal hero"><div class="sc-label">Assinaturas - '+MN[selM]+'/'+String(selY).slice(2)+'</div><div class="sc-val teal">'+totAssin+'</div><div class="sc-sub">RP: '+rpAssin+' &nbsp;&middot;&nbsp; RRR: '+rrrAssin+'</div>'+contratoMesTag(totAssinContratoMes,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+hojeTag(assinHoje,'var(--teal)','rgba(45,212,191,.35)','rgba(45,212,191,.1)')+'</div>'
@@ -950,7 +873,6 @@ function renderTotal(){
     +'<div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:2rem">'
     +'<div class="summary-card green"><div class="sc-label">Valor total estimativa no mes</div><div class="sc-val green" style="font-size:22px">'+fmoney([...rp.vendas,...rrr.vendas].reduce(function(a,d){return a+(d.amount_total||0);},0))+'</div><div class="sc-sub">soma das vendas fechadas - ambos funis</div></div>'
     +'</div>';
-
   // ── Por responsavel ──
   const umap={};
   function addU(u,f,d){if(!umap[u])umap[u]={ativo:0,vendas:[],contratos:[],perdas:0,valor:0};if(f==='ativo')umap[u].ativo++;else if(f==='perda')umap[u].perdas++;else{umap[u][f].push(d);if(f==='vendas')umap[u].valor+=(d.amount_total||0);}}
@@ -982,7 +904,6 @@ function renderTotal(){
     +'</div></div>';
   });
   h+='</div>';
-
   // ── Split por funil ──
   const etapasNomes='Contrato enviado, Assinatura eletronica, Fazendo estimativa, Preparando PDF, Apresentar, PRFB, C4';
   h+='<div class="total-split">'
@@ -999,11 +920,9 @@ function renderTotal(){
     +'<div class="total-row"><span class="total-row-label"><span class="resp-row-dot" style="background:var(--blue)"></span>Em andamento</span><span class="total-row-val" style="color:var(--blue)">'+rrrA+'</span></div>'
     +'<div style="margin-top:.5rem;font-size:10px;color:var(--muted);font-family:\'DM Mono\',monospace;line-height:1.6">Etapas: '+etapasNomes+'</div></div>'
     +'</div>';
-
   // ── D1 + Contratos por dia ──
   h+=renderD1(rp.contrato_d1,rrr.contrato_d1,rp.contrato_hoje,rrr.contrato_hoje,'total');
   h+=renderContratosPorDia((rp.contratos_mes||[]).concat(rrr.contratos_mes||[]),'total');
-
   // ── Em andamento (DEPOIS de contratos por dia) ──
   const eaRP=(rp.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RP'});});
   const eaRRR=(rrr.em_andamento||[]).map(function(d){return Object.assign({},d,{_f:'RRR'});});
@@ -1015,11 +934,9 @@ function renderTotal(){
     eaTot.forEach(function(d){const stgName=(d.deal_stage&&d.deal_stage.name)||d._pre_stage||'--';h+='<tr><td class="dn">'+( d.name||'--')+'</td><td class="du">'+uname(d)+'</td><td class="dd">'+d._f+'</td><td class="dd">'+stgName+'</td><td class="dd">'+fdate(d.updated_at)+'</td></tr>';});
     h+='</tbody></table></div></div>';
   }
-
   // ── Feed (DEPOIS de em andamento, fechado por padrao) ──
   const feedCombo=(rp.feed||[]).concat(rrr.feed||[]).sort(function(a,b){return b.ts.localeCompare(a.ts);});
   h+=renderFeed(feedCombo,20,'feed-total');
-
   // ── Perdas ──
   const todasPerdas=rp.perdas.concat(rrr.perdas);
   const mmapT={};todasPerdas.forEach(function(d){const m=(d.deal_lost_reason&&d.deal_lost_reason.name)||'--';mmapT[m]=(mmapT[m]||0)+1;});
@@ -1034,7 +951,6 @@ function renderTotal(){
   }
   return h;
 }
-
 function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
   const isMonday=new Date().getDay()===1;
   const d1Lbl=isMonday?'Sexta-feira':'Ontem';
@@ -1052,7 +968,6 @@ function renderD1(rpD1,rrrD1,rpHoje,rrrHoje,paneKey){
   h+='</div></div>';
   return h;
 }
-
 function renderContratosPorDia(contratos,paneKey){
   const byDay={};
   (contratos||[]).forEach(function(d){
@@ -1076,47 +991,63 @@ function renderContratosPorDia(contratos,paneKey){
   h+='</tbody></table></div></div>';
   return h;
 }
-
 function tog(id){const el=document.getElementById(id);if(!el)return;el.classList.toggle('open');}
 function togInline(id,arrowId){const el=document.getElementById(id);if(!el)return;const open=el.style.display==='none'||el.style.display==='';el.style.display=open?'block':'none';const arrow=document.getElementById(arrowId);if(arrow){arrow.style.transform=open?'rotate(90deg)':'';}}
 function switchF(k,btn){curF=k;document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');['rp','rrr','total'].forEach(function(f){document.getElementById('pane-'+f).style.display=f===k?'':'none';});}
-(function buildPeriodButtons(){
+// ── CORRECAO VIRADA DE MES ─────────────────────────────────────────────────
+// followingCurrent = usuario esta vendo o mes corrente (acompanha automatico)
+let followingCurrent=true;
+function buildPeriodButtons(){
   const now=new Date();
   const curM=now.getMonth()+1,curY=now.getFullYear();
   const prevDate=new Date(now.getFullYear(),now.getMonth()-1,1);
   const prevM=prevDate.getMonth()+1,prevY=prevDate.getFullYear();
   const sel=document.getElementById('period-selector');
+  sel.innerHTML=''; // limpa antes de reconstruir (essencial na virada de mes)
   [[prevM,prevY],[curM,curY]].forEach(function(pair,i){
     const m=pair[0],y=pair[1];
+    const isCurrent=(i===1);
+    const active=(m===selM&&y===selY);
     const btn=document.createElement('button');
-    btn.className='period-btn'+(i===1?' active':'');
+    btn.className='period-btn'+(active?' active':'');
     btn.dataset.m=m;btn.dataset.y=y;
     btn.textContent=MN[m]+'/'+String(y).slice(2);
     btn.addEventListener('click',function(){
       document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});
-      btn.classList.add('active');selM=m;selY=y;loadAll();
+      btn.classList.add('active');selM=m;selY=y;
+      followingCurrent=isCurrent; // se clicou no mes passado, para de acompanhar
+      loadAll();
     });
     sel.appendChild(btn);
   });
-})();
-setInterval(loadAll,60*60*1000);
+}
+// Garante que a selecao inicial seja sempre o mes corrente
+selM=new Date().getMonth()+1;
+selY=new Date().getFullYear();
+buildPeriodButtons();
+// Auto-refresh: antes de recarregar, checa se o mes virou
+function autoRefresh(){
+  const now=new Date();
+  const curM=now.getMonth()+1,curY=now.getFullYear();
+  if(followingCurrent&&(curM!==selM||curY!==selY)){
+    selM=curM;selY=curY;     // avanca pro mes novo (ex: Jun -> Jul)
+    buildPeriodButtons();     // reconstroi botoes: Jun/Jul -> Jul/Ago
+  }
+  loadAll();
+}
+setInterval(autoRefresh,60*60*1000);
 setInterval(tickCountdown,1000);
 loadAll();
 </script>
 </body>
 </html>
 """
-
-
 # ── Servidor com suporte a multiplas conexoes simultaneas ─────────────────────
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
-
-
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         print(f"  {' '.join(str(a) for a in args)}")
-
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
@@ -1125,11 +1056,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
-
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         qs     = dict(urllib.parse.parse_qsl(parsed.query))
-
         if parsed.path == "/":
             body = HTML.encode()
             self.send_response(200)
@@ -1137,7 +1066,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", len(body))
             self.end_headers()
             self.wfile.write(body)
-
         elif parsed.path == "/api/data":
             key   = qs.get("funil", "rp")
             # Usa now_br() para que mes/ano default sejam BRT, nao UTC
@@ -1161,8 +1089,6 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
-
-
 if __name__ == "__main__":
     import os
     PORT = int(os.environ.get("PORT", 8765))
