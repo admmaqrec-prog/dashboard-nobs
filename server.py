@@ -5,9 +5,6 @@ Rode com: python3 server.py
 Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
-import os
-import time
-import threading
 import urllib.request
 import urllib.parse
 import datetime
@@ -230,74 +227,12 @@ def custom_date_equals(deal, label_substring, date_str):
     if not val:
         return False
     return val == date_str
-# ── cache em memoria + refresh em background ────────────────────────────────
-# O RD Station e lento (paginas de 200 registros, varias etapas x 2 funis) e o
-# dashboard antigo batia na API do zero a cada carregamento de pagina/refresh.
-# Isso gerava timeouts/erros no Render quando a API demorava ou varios usuarios
-# abriam o dashboard ao mesmo tempo. Agora os dados ficam em cache e uma thread
-# em background mantem o cache quente; as requisicoes HTTP so leem da memoria
-# (ficam quase instantaneas) e nunca esperam o RD Station responder.
-CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "300"))  # 5 min
-_cache = {}           # (funil, mes, ano) -> {"data": ..., "ts": epoch}
-_cache_lock = threading.Lock()
-_fetch_locks = {}     # (funil, mes, ano) -> Lock, garante 1 fetch por vez por chave
-_fetch_locks_guard = threading.Lock()
-def _get_fetch_lock(cache_key):
-    with _fetch_locks_guard:
-        lock = _fetch_locks.get(cache_key)
-        if lock is None:
-            lock = threading.Lock()
-            _fetch_locks[cache_key] = lock
-        return lock
-def get_funil_data_cached(key, month, year, force=False):
-    """Serve do cache sempre que possivel. So chama load_funil_data (que bate
-    pesado na API do RD Station) quando o cache esta vazio/expirado, e usa um
-    lock por chave para evitar que varias requisicoes simultaneas disparem o
-    mesmo fetch pesado ao mesmo tempo (thundering herd)."""
-    cache_key = (key, month, year)
-    if not force:
-        with _cache_lock:
-            entry = _cache.get(cache_key)
-        if entry and (time.time() - entry["ts"]) < CACHE_TTL_SECONDS:
-            return entry["data"]
-    lock = _get_fetch_lock(cache_key)
-    with lock:
-        if not force:
-            with _cache_lock:
-                entry = _cache.get(cache_key)
-            if entry and (time.time() - entry["ts"]) < CACHE_TTL_SECONDS:
-                return entry["data"]
-        data = load_funil_data(key, month, year)
-        with _cache_lock:
-            _cache[cache_key] = {"data": data, "ts": time.time()}
-        return data
-def _background_refresh_loop():
-    """Roda para sempre em thread daemon: mantem o cache do mes atual e do mes
-    anterior (para ambos os funis) sempre quente, para que nenhum usuario
-    precise esperar o RD Station responder."""
-    while True:
-        try:
-            today = today_br()
-            cur_m, cur_y = today.month, today.year
-            prev_date = today.replace(day=1) - datetime.timedelta(days=1)
-            prev_m, prev_y = prev_date.month, prev_date.year
-            for m, y in [(cur_m, cur_y), (prev_m, prev_y)]:
-                for key in FUNIS.keys():
-                    try:
-                        print(f"   [CACHE] atualizando {key} {m}/{y} em background...")
-                        get_funil_data_cached(key, m, y, force=True)
-                        print(f"   [CACHE] {key} {m}/{y} atualizado com sucesso.")
-                    except Exception as e:
-                        print(f"   [CACHE WARN] falha ao atualizar {key} {m}/{y}: {e}")
-        except Exception as e:
-            print(f"   [CACHE LOOP ERRO] {e}")
-        time.sleep(CACHE_TTL_SECONDS)
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
     funil = FUNIS[key]
     pid   = funil["id"]
     tasks = {}
-    with ThreadPoolExecutor(max_workers=10) as ex:
+    with ThreadPoolExecutor(max_workers=20) as ex:
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_stage_active, pid, e["id"])] = ("active", e)
         tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
@@ -313,7 +248,7 @@ def load_funil_data(key, month, year):
     todas_perdas      = []
     postcontrato_pool = {}
     pre_contrato_map  = {}
-    for fut in as_completed(tasks, timeout=240):
+    for fut in as_completed(tasks, timeout=160):
         kind, meta = tasks[fut]
         try:
             result = fut.result()
@@ -1138,8 +1073,8 @@ class Handler(BaseHTTPRequestHandler):
             month = int(qs.get("month", now.month))
             year  = int(qs.get("year",  now.year))
             try:
-                print(f"\n-> Servindo {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()})")
-                data = get_funil_data_cached(key, month, year)
+                print(f"\n-> Buscando {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()})")
+                data = load_funil_data(key, month, year)
                 self.send_json(data)
                 print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  d1={len(data['contrato_d1'])}  hoje={len(data['contrato_hoje'])}")
             except Exception as e:
@@ -1155,6 +1090,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 if __name__ == "__main__":
+    import os
     PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
     server = ThreadedHTTPServer((HOST, PORT), Handler)
@@ -1164,12 +1100,7 @@ if __name__ == "__main__":
     print(f"\n  Acesse: http://{HOST}:{PORT}")
     print(f"  Fuso usado para 'hoje': BRT (UTC-3)")
     print(f"  Server BRT now: {now_br().isoformat()}")
-    print(f"  Cache TTL: {CACHE_TTL_SECONDS}s (dados servidos da memoria, refresh em background)")
     print("  Pressione Ctrl+C para parar\n")
-    # Thread daemon que mantem o cache quente -- inicia o "aquecimento" ja no
-    # boot, para que o primeiro usuario nao precise esperar o RD Station.
-    refresher = threading.Thread(target=_background_refresh_loop, daemon=True)
-    refresher.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
