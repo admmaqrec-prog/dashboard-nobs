@@ -5,12 +5,16 @@ Rode com: python3 server.py
 Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
+import os
+import time
+import threading
 import urllib.request
 import urllib.parse
+import urllib.error
 import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 TOKEN = "68c30c8a73e14f0019be70b1"
 BASE  = "https://crm.rdstation.com/api/v1"
 # ── Fuso horario Brasilia (BRT/UTC-3) ────────────────────────────────────────
@@ -84,7 +88,12 @@ FUNIS = {
     }
 }
 # ── helpers ───────────────────────────────────────────────────────────────────
-def rd_get(path, retries=2):
+def rd_get(path, retries=4):
+    """Busca na API do RD Station com retry + backoff exponencial. Antes eram
+    so 2 tentativas com 1s de espera fixo -- sob carga (varios fetches pesados
+    ao mesmo tempo) a API do RD comecava a dar 429/5xx e essas falhas eram
+    engolidas silenciosamente mais acima, fazendo os numeros do dashboard
+    ficarem errados (contagens mais baixas que o real) sem nenhum erro visivel."""
     sep = "&" if "?" in path else "?"
     url = f"{BASE}{path}{sep}token={TOKEN}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -93,10 +102,18 @@ def rd_get(path, retries=2):
         try:
             with urllib.request.urlopen(req, timeout=40) as r:
                 return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            last_err = e
+            wait = min(30, 2 ** attempt)
+            if e.code == 429:
+                wait = max(wait, 8)  # rate limit: espera mais que o backoff normal
+            if attempt < retries:
+                print(f"   [RD RETRY] HTTP {e.code} em '{path[:70]}' -- tentativa {attempt+1}/{retries}, aguardando {wait}s")
+                time.sleep(wait)
         except Exception as e:
             last_err = e
             if attempt < retries:
-                import time; time.sleep(1)
+                time.sleep(min(30, 2 ** attempt))
     raise last_err
 def fetch_all(pipeline_id, stage_id, extra=""):
     deals, page = [], 1
@@ -227,12 +244,110 @@ def custom_date_equals(deal, label_substring, date_str):
     if not val:
         return False
     return val == date_str
+# ── cache em memoria + refresh em background ────────────────────────────────
+# O RD Station e lento (paginas de 200 registros, varias etapas x 2 funis) e o
+# dashboard antigo batia na API do zero a cada carregamento de pagina/refresh.
+# Isso gerava timeouts/erros no Render quando a API demorava ou varios usuarios
+# abriam o dashboard ao mesmo tempo. Agora os dados ficam em cache e uma thread
+# em background mantem o cache quente; as requisicoes HTTP so leem da memoria
+# (ficam quase instantaneas) e nunca esperam o RD Station responder.
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "300"))  # 5 min
+_cache = {}           # (funil, mes, ano) -> {"data": ..., "ts": epoch}
+_cache_lock = threading.Lock()
+_fetch_locks = {}     # (funil, mes, ano) -> Lock, garante 1 fetch por vez por chave
+_fetch_locks_guard = threading.Lock()
+# Limita quantos fetches PESADOS (load_funil_data, que dispara ~20 chamadas
+# paginadas na API do RD Station cada) podem rodar ao mesmo tempo no processo
+# inteiro. O front-end busca RP e RRR em paralelo de proposito (2 de uma vez),
+# entao o limite fica em 2 -- exatamente a concorrencia maxima que o codigo
+# original ja tinha. Sem esse limite, a thread de background (que atualiza o
+# cache a cada 5 min) podia rodar ao mesmo tempo que um "Atualizar" manual do
+# usuario, dobrando ou triplicando a carga simultanea sobre a API do RD e
+# fazendo ela comecar a devolver erro/429 -- que ate entao era engolido em
+# silencio e aparecia como "numeros errados" no dashboard.
+_rd_fetch_semaphore = threading.Semaphore(2)
+def _get_fetch_lock(cache_key):
+    with _fetch_locks_guard:
+        lock = _fetch_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _fetch_locks[cache_key] = lock
+        return lock
+def get_funil_data_cached(key, month, year, force=False):
+    """Serve do cache sempre que possivel. So chama load_funil_data (que bate
+    pesado na API do RD Station) quando o cache esta vazio/expirado, e usa um
+    lock por chave para evitar que varias requisicoes simultaneas disparem o
+    mesmo fetch pesado ao mesmo tempo (thundering herd).
+    IMPORTANTE: se o fetch falhar completamente OU vier incompleto (alguma
+    etapa/pagina falhou na API do RD -- ver load_warnings), o cache anterior
+    (bom) e mantido em vez de ser sobrescrito por numeros parciais/errados."""
+    cache_key = (key, month, year)
+    if not force:
+        with _cache_lock:
+            entry = _cache.get(cache_key)
+        if entry and (time.time() - entry["ts"]) < CACHE_TTL_SECONDS:
+            return entry["data"]
+    lock = _get_fetch_lock(cache_key)
+    with lock:
+        if not force:
+            with _cache_lock:
+                entry = _cache.get(cache_key)
+            if entry and (time.time() - entry["ts"]) < CACHE_TTL_SECONDS:
+                return entry["data"]
+        with _cache_lock:
+            old_entry = _cache.get(cache_key)
+        try:
+            with _rd_fetch_semaphore:
+                data = load_funil_data(key, month, year)
+        except Exception as e:
+            print(f"   [CACHE ERRO] fetch de {cache_key} falhou: {e}")
+            if old_entry:
+                stale = dict(old_entry["data"])
+                stale["_stale_fallback"] = True
+                stale["_load_warnings"] = [str(e)]
+                return stale
+            raise
+        if data.get("_load_incomplete"):
+            print(f"   [CACHE WARN] fetch de {cache_key} veio incompleto ({data.get('_load_warnings')}); "
+                  f"{'mantendo cache anterior' if old_entry else 'sem cache anterior, usando mesmo assim'}")
+            if old_entry:
+                stale = dict(old_entry["data"])
+                stale["_stale_fallback"] = True
+                stale["_load_warnings"] = data.get("_load_warnings")
+                return stale
+            # sem cache anterior (primeiro fetch desta chave): melhor mostrar
+            # dados parciais do que nada, mas o aviso vai junto no payload.
+            return data
+        with _cache_lock:
+            _cache[cache_key] = {"data": data, "ts": time.time()}
+        return data
+def _background_refresh_loop():
+    """Roda para sempre em thread daemon: mantem o cache do mes atual e do mes
+    anterior (para ambos os funis) sempre quente, para que nenhum usuario
+    precise esperar o RD Station responder."""
+    while True:
+        try:
+            today = today_br()
+            cur_m, cur_y = today.month, today.year
+            prev_date = today.replace(day=1) - datetime.timedelta(days=1)
+            prev_m, prev_y = prev_date.month, prev_date.year
+            for m, y in [(cur_m, cur_y), (prev_m, prev_y)]:
+                for key in FUNIS.keys():
+                    try:
+                        print(f"   [CACHE] atualizando {key} {m}/{y} em background...")
+                        get_funil_data_cached(key, m, y, force=True)
+                        print(f"   [CACHE] {key} {m}/{y} atualizado com sucesso.")
+                    except Exception as e:
+                        print(f"   [CACHE WARN] falha ao atualizar {key} {m}/{y}: {e}")
+        except Exception as e:
+            print(f"   [CACHE LOOP ERRO] {e}")
+        time.sleep(CACHE_TTL_SECONDS)
 # ── main loader ───────────────────────────────────────────────────────────────
 def load_funil_data(key, month, year):
     funil = FUNIS[key]
     pid   = funil["id"]
     tasks = {}
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_stage_active, pid, e["id"])] = ("active", e)
         tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
@@ -248,28 +363,44 @@ def load_funil_data(key, month, year):
     todas_perdas      = []
     postcontrato_pool = {}
     pre_contrato_map  = {}
-    for fut in as_completed(tasks, timeout=160):
-        kind, meta = tasks[fut]
-        try:
-            result = fut.result()
-        except Exception as e:
-            print(f"   [WARN] task {kind}/{meta} falhou: {e}")
-            result = [] if kind != "pre_contrato" else (None, [])
-        if kind == "active":
-            etapas_map[meta["id"]]["deals"] = result
-        elif kind == "ok":
-            ok_deals = result
-        elif kind == "lost":
-            todas_perdas.extend(result)
-        elif kind == "postcontrato_all":
-            sid = meta
-            if sid not in postcontrato_pool:
-                postcontrato_pool[sid] = []
-            postcontrato_pool[sid].extend(result)
-        elif kind == "pre_contrato":
-            nome_lower = meta
-            sid_result, deals_result = result
-            pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
+    # ── load_warnings: registra qualquer falha parcial (rate limit, timeout,
+    # etc na API do RD Station). Antes essas falhas eram engolidas em
+    # silencio -- a tarefa virava lista vazia e os totais do dashboard ficavam
+    # errados (mais baixos que o real) sem nenhum aviso. Agora isso e
+    # sinalizado no retorno para que o cache saiba nao confiar num resultado
+    # incompleto. ────────────────────────────────────────────────────────────
+    load_warnings  = []
+    completed_futs = set()
+    try:
+        for fut in as_completed(tasks, timeout=240):
+            completed_futs.add(fut)
+            kind, meta = tasks[fut]
+            try:
+                result = fut.result()
+            except Exception as e:
+                print(f"   [WARN] task {kind}/{meta} falhou: {e}")
+                load_warnings.append(f"{kind}/{meta}: {e}")
+                result = [] if kind != "pre_contrato" else (None, [])
+            if kind == "active":
+                etapas_map[meta["id"]]["deals"] = result
+            elif kind == "ok":
+                ok_deals = result
+            elif kind == "lost":
+                todas_perdas.extend(result)
+            elif kind == "postcontrato_all":
+                sid = meta
+                if sid not in postcontrato_pool:
+                    postcontrato_pool[sid] = []
+                postcontrato_pool[sid].extend(result)
+            elif kind == "pre_contrato":
+                nome_lower = meta
+                sid_result, deals_result = result
+                pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
+    except FuturesTimeoutError:
+        pendentes = [tasks[f] for f in tasks if f not in completed_futs]
+        msg = f"timeout de 240s com {len(pendentes)} tarefa(s) pendente(s): {pendentes}"
+        print(f"   [WARN] {msg}")
+        load_warnings.append(msg)
     assin_stage_id = funil.get("assin_stage_id", "")
     etapas_data = []
     for e in funil["etapas"]:
@@ -464,6 +595,8 @@ def load_funil_data(key, month, year):
         "assinaturas_hoje_total":   assinaturas_hoje_total,
         "assinaturas_contrato_mes": assinaturas_contrato_mes,
         "vendas_contrato_mes":      vendas_contrato_mes,
+        "_load_warnings":           load_warnings,
+        "_load_incomplete":         len(load_warnings) > 0,
     }
 # ── HTML ──────────────────────────────────────────────────────────────────────
 HTML = r"""<!DOCTYPE html>
@@ -619,7 +752,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
     <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">&#127769;</button>
-    <button class="refresh-btn" id="rbtn" onclick="loadAll()"><span id="rspin">&#8635;</span> Atualizar</button>
+    <button class="refresh-btn" id="rbtn" onclick="loadAll(true)"><span id="rspin">&#8635;</span> Atualizar</button>
   </div>
 </header>
 <main>
@@ -657,7 +790,7 @@ function tickCountdown(){
   document.getElementById('nr').textContent='proximo em '+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 function setLoad(p,t){document.getElementById('lf').style.width=p+'%';document.getElementById('lt').textContent=t;}
-async function loadAll(){
+async function loadAll(forceRefresh){
   document.getElementById('rbtn').querySelector('#rspin').className='spin';
   document.getElementById('sdot').style.cssText='width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)';
   document.getElementById('loading').style.display='flex';
@@ -668,9 +801,13 @@ async function loadAll(){
     setLoad(20,'Buscando ambos os funis em paralelo...');
     var prog=20;
     var progInt=setInterval(function(){if(prog<80){prog+=2;setLoad(prog,'Aguardando API do RD Station...');}},2000);
+    // forceRefresh=true (botao "Atualizar" ou troca de periodo) ignora o cache do
+    // servidor e busca dados ao vivo no RD Station. Sem isso, o servidor pode
+    // devolver dados de ate 5min atras (cache em background).
+    const rsuf=forceRefresh?'&refresh=1':'';
     const results=await Promise.all([
-      fetch('/api/data?funil=rp&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RP: '+r.statusText);return r.json();}),
-      fetch('/api/data?funil=rrr&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RRR: '+r.statusText);return r.json();})
+      fetch('/api/data?funil=rp&month='+selM+'&year='+selY+rsuf,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RP: '+r.statusText);return r.json();}),
+      fetch('/api/data?funil=rrr&month='+selM+'&year='+selY+rsuf,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RRR: '+r.statusText);return r.json();})
     ]);
     clearInterval(progInt);
     clearTimeout(tid);
@@ -681,7 +818,10 @@ async function loadAll(){
     await new Promise(r=>setTimeout(r,250));setLoad(100,'Pronto!');await new Promise(r=>setTimeout(r,250));
     document.getElementById('loading').style.display='none';
     renderAll();
-    document.getElementById('lu').textContent='Atualizado '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    const stale=rp._stale_fallback||rrr._stale_fallback;
+    if(stale){if(rp._load_warnings)console.warn('RP load_warnings:',rp._load_warnings);if(rrr._load_warnings)console.warn('RRR load_warnings:',rrr._load_warnings);}
+    document.getElementById('lu').innerHTML='Atualizado '+new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})
+      +(stale?' <span style="color:var(--amber)" title="A API do RD Station falhou/demorou nesta tentativa; mostrando o ultimo dado bom conhecido. Tente Atualizar novamente em instantes.">&#9888; instavel</span>':'');
     document.getElementById('sdot').style.cssText='width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite';
     startCountdown();
   }catch(e){
@@ -1016,7 +1156,7 @@ function buildPeriodButtons(){
       document.querySelectorAll('.period-btn').forEach(function(x){x.classList.remove('active');});
       btn.classList.add('active');selM=m;selY=y;
       followingCurrent=isCurrent; // se clicou no mes passado, para de acompanhar
-      loadAll();
+      loadAll(true);
     });
     sel.appendChild(btn);
   });
@@ -1072,9 +1212,10 @@ class Handler(BaseHTTPRequestHandler):
             now   = now_br()
             month = int(qs.get("month", now.month))
             year  = int(qs.get("year",  now.year))
+            force_refresh = qs.get("refresh") in ("1", "true", "yes")
             try:
-                print(f"\n-> Buscando {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()})")
-                data = load_funil_data(key, month, year)
+                print(f"\n-> Servindo {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()}) refresh={force_refresh}")
+                data = get_funil_data_cached(key, month, year, force=force_refresh)
                 self.send_json(data)
                 print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  d1={len(data['contrato_d1'])}  hoje={len(data['contrato_hoje'])}")
             except Exception as e:
@@ -1090,7 +1231,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 if __name__ == "__main__":
-    import os
     PORT = int(os.environ.get("PORT", 8765))
     HOST = "0.0.0.0"
     server = ThreadedHTTPServer((HOST, PORT), Handler)
@@ -1100,7 +1240,12 @@ if __name__ == "__main__":
     print(f"\n  Acesse: http://{HOST}:{PORT}")
     print(f"  Fuso usado para 'hoje': BRT (UTC-3)")
     print(f"  Server BRT now: {now_br().isoformat()}")
+    print(f"  Cache TTL: {CACHE_TTL_SECONDS}s (dados servidos da memoria, refresh em background)")
     print("  Pressione Ctrl+C para parar\n")
+    # Thread daemon que mantem o cache quente -- inicia o "aquecimento" ja no
+    # boot, para que o primeiro usuario nao precise esperar o RD Station.
+    refresher = threading.Thread(target=_background_refresh_loop, daemon=True)
+    refresher.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
