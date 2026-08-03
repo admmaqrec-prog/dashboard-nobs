@@ -5,6 +5,8 @@ Rode com: python3 server.py
 Porta definida pela variavel de ambiente PORT (padrao 8765)
 """
 import json
+import time
+import threading
 import urllib.request
 import urllib.parse
 import datetime
@@ -14,6 +16,26 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TOKEN = "68c30c8a73e14f0019be70b1"
 BASE  = "https://crm.rdstation.com/api/v1"
+
+# -- Cache dos dados brutos por funil -----------------------------------------
+# O gargalo de performance e a busca do historico completo (todas as vendas e
+# perdas ja registradas) toda vez que o dashboard carrega ou o mes e trocado,
+# mesmo que so a filtragem por mes mude. Por isso separamos em duas etapas:
+#   1) fetch_raw_funil()  -> busca cara na API do RD (independente do mes)
+#   2) load_funil_data()  -> filtragem por mes/ano, 100% local e rapida
+# O resultado de (1) fica em cache por CACHE_TTL_SECONDS e e reaproveitado
+# entre trocas de mes, abas e recarregamentos automaticos.
+CACHE_TTL_SECONDS = 600  # 10 minutos
+
+_raw_cache = {}                  # { funil_key: {"ts": float, "data": {...}} }
+_raw_cache_locks = {}             # { funil_key: threading.Lock() }
+_raw_cache_locks_guard = threading.Lock()
+
+def _lock_for(key):
+    with _raw_cache_locks_guard:
+        if key not in _raw_cache_locks:
+            _raw_cache_locks[key] = threading.Lock()
+        return _raw_cache_locks[key]
 
 # ── Fuso horario Brasilia (BRT/UTC-3) ────────────────────────────────────────
 BR_TZ = datetime.timezone(datetime.timedelta(hours=-3))
@@ -254,7 +276,10 @@ def custom_date_equals(deal, label_substring, date_str):
     return val == date_str
 
 # ── main loader ───────────────────────────────────────────────────────────────
-def load_funil_data(key, month, year):
+def fetch_raw_funil(key):
+    """Busca TODOS os dados brutos do funil na API do RD, sem filtro de mes.
+    Esta e a parte cara (rede). O resultado e cacheado por get_raw_funil() e
+    reaproveitado entre meses, abas e requisicoes dentro do TTL do cache."""
     funil = FUNIS[key]
     pid   = funil["id"]
 
@@ -265,6 +290,10 @@ def load_funil_data(key, month, year):
         tasks[ex.submit(fetch_ok_stage, pid, funil["ok_stage_id"])] = ("ok", None)
         for e in funil["etapas"]:
             tasks[ex.submit(fetch_lost_stage, pid, e["id"])] = ("lost", e)
+        # Perdas tambem na propria etapa de contrato: uma negociacao perdida
+        # logo apos o envio do contrato (antes de avancar de etapa) tinha esse
+        # caso descoberto -- ela nunca era contabilizada como perda.
+        tasks[ex.submit(fetch_lost_stage, pid, funil["contrato_stage_id"])] = ("lost", {"id": funil["contrato_stage_id"], "nome": "Contrato"})
         all_postcontrato_stage_ids = [e["id"] for e in funil["etapas"]] + [funil["contrato_stage_id"]]
         for sid in all_postcontrato_stage_ids:
             tasks[ex.submit(fetch_all, pid, sid)] = ("postcontrato_all", sid)
@@ -277,7 +306,7 @@ def load_funil_data(key, month, year):
     postcontrato_pool = {}
     pre_contrato_map  = {}
 
-    for fut in as_completed(tasks, timeout=160):
+    for fut in as_completed(tasks, timeout=220):
         kind, meta = tasks[fut]
         try:
             result = fut.result()
@@ -300,6 +329,47 @@ def load_funil_data(key, month, year):
             sid_result, deals_result = result
             pre_contrato_map[nome_lower] = {"sid": sid_result, "deals": deals_result}
 
+    return {
+        "etapas_map":        etapas_map,
+        "ok_deals":          ok_deals,
+        "todas_perdas":      todas_perdas,
+        "postcontrato_pool": postcontrato_pool,
+        "pre_contrato_map":  pre_contrato_map,
+    }
+
+
+def get_raw_funil(key, force=False):
+    """Retorna os dados brutos do funil, usando cache quando possivel.
+    force=True ignora o cache e busca dados novos na API do RD (usado pelo
+    botao "Atualizar" do dashboard)."""
+    cached = _raw_cache.get(key)
+    if not force and cached and (time.time() - cached["ts"]) < CACHE_TTL_SECONDS:
+        return cached["data"]
+    lock = _lock_for(key)
+    with lock:
+        # revalida apos obter o lock: outra thread pode ja ter atualizado
+        cached = _raw_cache.get(key)
+        if not force and cached and (time.time() - cached["ts"]) < CACHE_TTL_SECONDS:
+            return cached["data"]
+        idade = f"{time.time() - cached['ts']:.0f}s" if cached else "sem cache"
+        print(f"   [CACHE MISS] funil='{key}' force={force} idade_anterior={idade} -- buscando na API do RD...")
+        t0 = time.time()
+        data = fetch_raw_funil(key)
+        print(f"   [CACHE MISS] funil='{key}' concluido em {time.time()-t0:.1f}s")
+        _raw_cache[key] = {"ts": time.time(), "data": data}
+        return data
+
+
+def load_funil_data(key, month, year, force=False):
+    funil = FUNIS[key]
+
+    raw                = get_raw_funil(key, force=force)
+    etapas_map         = raw["etapas_map"]
+    ok_deals           = raw["ok_deals"]
+    todas_perdas       = raw["todas_perdas"]
+    postcontrato_pool  = raw["postcontrato_pool"]
+    pre_contrato_map   = raw["pre_contrato_map"]
+
     assin_stage_id = funil.get("assin_stage_id", "")
     etapas_data = []
     for e in funil["etapas"]:
@@ -321,6 +391,13 @@ def load_funil_data(key, month, year):
     for sid, deals in postcontrato_pool.items():
         all_postcontrato_deals.extend(deals)
     all_postcontrato_deals.extend(ok_deals)
+    # CORRECAO: negociacoes perdidas tambem tem "Data do contrato" / "Data da
+    # assinatura" preenchidas e precisam entrar nesse pool. Sem isso, uma
+    # negociacao que teve contrato enviado num mes e foi perdida depois
+    # (comum em meses ja fechados, com mais tempo para isso acontecer)
+    # desaparecia dos totais de "Contratos enviados" e "Assinaturas" -- o que
+    # fazia o mes anterior parecer sub-carregado / com numeros errados.
+    all_postcontrato_deals.extend(todas_perdas)
 
     for d in all_postcontrato_deals:
         if not custom_date_in_month(d, "Data do contrato", month, year):
@@ -671,7 +748,7 @@ table.dt tr:hover td{background:rgba(255,255,255,.02)}
     <div class="last-update" id="lu">--</div>
     <div class="next-refresh" id="nr">proximo em --</div>
     <button class="theme-btn" id="tbtn" onclick="toggleTheme()" title="Alternar tema">&#127769;</button>
-    <button class="refresh-btn" id="rbtn" onclick="loadAll()"><span id="rspin">&#8635;</span> Atualizar</button>
+    <button class="refresh-btn" id="rbtn" onclick="loadAll(true)"><span id="rspin">&#8635;</span> Atualizar</button>
   </div>
 </header>
 <main>
@@ -714,7 +791,7 @@ function tickCountdown(){
 
 function setLoad(p,t){document.getElementById('lf').style.width=p+'%';document.getElementById('lt').textContent=t;}
 
-async function loadAll(){
+async function loadAll(force){
   document.getElementById('rbtn').querySelector('#rspin').className='spin';
   document.getElementById('sdot').style.cssText='width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber)';
   document.getElementById('loading').style.display='flex';
@@ -725,9 +802,10 @@ async function loadAll(){
     setLoad(20,'Buscando ambos os funis em paralelo...');
     var prog=20;
     var progInt=setInterval(function(){if(prog<80){prog+=2;setLoad(prog,'Aguardando API do RD Station...');}},2000);
+    const fparam=force?'&force=1':'';
     const results=await Promise.all([
-      fetch('/api/data?funil=rp&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RP: '+r.statusText);return r.json();}),
-      fetch('/api/data?funil=rrr&month='+selM+'&year='+selY,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RRR: '+r.statusText);return r.json();})
+      fetch('/api/data?funil=rp&month='+selM+'&year='+selY+fparam,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RP: '+r.statusText);return r.json();}),
+      fetch('/api/data?funil=rrr&month='+selM+'&year='+selY+fparam,{signal:ctrl.signal}).then(function(r){if(!r.ok)throw new Error('RRR: '+r.statusText);return r.json();})
     ]);
     clearInterval(progInt);
     clearTimeout(tid);
@@ -1099,7 +1177,7 @@ function switchF(k,btn){curF=k;document.querySelectorAll('.tab-btn').forEach(fun
     sel.appendChild(btn);
   });
 })();
-setInterval(loadAll,60*60*1000);
+setInterval(function(){loadAll(true);},60*60*1000);
 setInterval(tickCountdown,1000);
 loadAll();
 </script>
@@ -1144,9 +1222,10 @@ class Handler(BaseHTTPRequestHandler):
             now   = now_br()
             month = int(qs.get("month", now.month))
             year  = int(qs.get("year",  now.year))
+            force = qs.get("force", "") in ("1", "true", "True")
             try:
-                print(f"\n-> Buscando {key.upper()} -- {month}/{year}  (server now BRT: {now.isoformat()})")
-                data = load_funil_data(key, month, year)
+                print(f"\n-> Buscando {key.upper()} -- {month}/{year}  force={force}  (server now BRT: {now.isoformat()})")
+                data = load_funil_data(key, month, year, force=force)
                 self.send_json(data)
                 print(f"   OK  vendas={len(data['vendas'])}  contratos={len(data['contratos_mes'])}  feed={len(data['feed'])}  d1={len(data['contrato_d1'])}  hoje={len(data['contrato_hoje'])}")
             except Exception as e:
